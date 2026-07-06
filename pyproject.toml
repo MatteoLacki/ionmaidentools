@@ -5,25 +5,28 @@ build-backend = "setuptools.build_meta"
 [project]
 name="ionmaidentools"
 version="0.0.1"
-description="SHORT DESC."
+description="Necroflow pipeline definitions and CLI wrapper tools for the ionmaiden project."
 readme="README.md"
 authors=[
     {name="MatteoLacki",email="matteo.lacki@gmail.com"},
 ]
-requires-python = ">=3.6"
-# dependencies = [
-#     "click",
-# ]
+requires-python = ">=3.11"
+dependencies = [
+    "tomlkit",
+]
 
-# [project.optional-dependencies]
-# dev = [
-#     "twine",
-#     "pytest",
-# ]
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
 
 
 [project.scripts]
-example_shell_script = "ionmaidentools.cli.example_shell_script:example_shell_script"
+necromerge2-stage-dir = "ionmaidentools.cli.necromerge2_stage_dir:main"
+necromerge2-run-mkpmsms = "ionmaidentools.cli.necromerge2_run_mkpmsms:main"
+necromerge2-stage-sage-input = "ionmaidentools.cli.necromerge2_stage_sage_input:main"
+necromerge2-run-sage = "ionmaidentools.cli.necromerge2_run_sage:main"
+necromerge2-extract-config = "ionmaidentools.cli.necromerge2_extract_config:main"
 
 [project.urls]
 homepage="https://github.com/MatteoLacki/ionmaidentools.git"
