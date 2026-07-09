@@ -13,6 +13,7 @@ authors=[
 requires-python = ">=3.11"
 dependencies = [
     "tomlkit",
+    "dictodot",
 ]
 
 [project.optional-dependencies]
@@ -22,8 +23,6 @@ dev = [
 
 
 [project.scripts]
-necromerge2-stage-dir = "ionmaidentools.cli.necromerge2_stage_dir:main"
-necromerge2-run-mkpmsms = "ionmaidentools.cli.necromerge2_run_mkpmsms:main"
 necromerge2-stage-sage-input = "ionmaidentools.cli.necromerge2_stage_sage_input:main"
 necromerge2-run-sage = "ionmaidentools.cli.necromerge2_run_sage:main"
 
