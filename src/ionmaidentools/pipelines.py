@@ -235,14 +235,8 @@ def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig, dataset: st
     return ArgmaxSample[argmaxes], ArgmaxSieveStats[stats]
 
 
-@R.command(
-    "venvs/common/bin/ms1_extract_sample_tensors {ms1} {argmaxes} {tensors}"
-    " --radii-tof {radii_tof} --radii-urt {radii_urt} --radii-scan {radii_scan}"
-)
-def extract_ms1_sample_tensors(
-    ms1: Ms1Events, argmaxes: ArgmaxSample,
-    radii_tof: int, radii_urt: int, radii_scan: int,
-):
+@R.command("venvs/common/bin/ms1_extract_sample_tensors {ms1} {argmaxes} {config} {tensors}")
+def extract_ms1_sample_tensors(ms1: Ms1Events, argmaxes: ArgmaxSample, config: ScaleEstimationConfig):
     return SampleTensors[tensors]
 
 
@@ -411,10 +405,7 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     se = cfg.scale_estimation
     P.scale_estimation_config = R.write_scale_estimation_config(text=tomlkit.dumps(se))
     P.argmaxes, P.argmax_sieve_stats = R.find_ms1_argmaxes(P.ms1_events, P.scale_estimation_config, dataset=dataset)
-    P.sample_tensors = R.extract_ms1_sample_tensors(
-        P.ms1_events, P.argmaxes,
-        radii_tof=se.radii.tof, radii_urt=se.radii.urt, radii_scan=se.radii.scan,
-    )
+    P.sample_tensors = R.extract_ms1_sample_tensors(P.ms1_events, P.argmaxes, P.scale_estimation_config)
     P.scale_estimates = R.fit_ms1_scale_estimates(
         P.argmaxes, P.argmax_sieve_stats, P.sample_tensors, P.scale_estimation_config, dataset=dataset,
     )
