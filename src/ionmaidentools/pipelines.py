@@ -12,12 +12,18 @@ The external tools this pipeline shells out to (timstofu/quadops/boxing) were pa
 accept fields as flags directly, with their old config-file argument made optional (and
 still positionally compatible with the old Snakemake pipeline) -- `ms1_find_argmaxes`/
 `ms1_fit_scale_estimates` keep that optional TOML `settings_path` argument, which is what
-`write_scale_estimation_config` now feeds. Every rule invokes a real installed CLI
-directly (no custom Python wrapper CLIs) except `necromerge2-run-sage`, which runs Sage's
-compiled binary and writes a run_info.json sidecar (its own JSON config file is generated
-separately by `write_sage_config` straight from `cfg.sage`, which already matches Sage's
-config schema 1:1), and `necromerge2-stage-sage-input`, which stages Sage's spectra input
-directory (a real co-location requirement of Sage's own input format).
+`write_scale_estimation_config` now feeds. `git/ionmaidenmetal`'s `mkpmsms` C++ binary got
+the same treatment the other direction: it previously had no config-file option at all
+(`[pseudomsms]`'s algorithm-dependent flag set was hand-exploded via a `_cli_flags` dict-
+to-flags helper, ported verbatim from the old Snakemake rule), so `--config <path.toml>`
+was added to its shared `ParamTree` CLI parser (`param_tree.hpp`) -- `write_pseudomsms_config`
+now feeds it `cfg.pseudomsms` directly, same as the Python tools, and `_cli_flags` is gone.
+Every rule invokes a real installed CLI directly (no custom Python wrapper CLIs) except
+`necromerge2-run-sage`, which runs Sage's compiled binary and writes a run_info.json
+sidecar (its own JSON config file is generated separately by `write_sage_config` straight
+from `cfg.sage`, which already matches Sage's config schema 1:1), and
+`necromerge2-stage-sage-input`, which stages Sage's spectra input directory (a real
+co-location requirement of Sage's own input format).
 
 TODO(regression-db): the old Snakemake `sage_summarize`/`short_test` rules recorded
 results into a SQLite regression DB and did an interactive baseline comparison. Neither
@@ -43,21 +49,6 @@ R = Rules()
 # constraint-placeholder mechanism), so it no longer needs to travel through job
 # config.
 CORES = os.cpu_count() or 1
-
-
-def _cli_flags(params: dict) -> str:
-    """Build `--name value` flag tokens from a dict, matching the mkpmsms binary's own
-    CLI convention for its algorithm-specific tofs_extraction_params (list values
-    space-joined, string values containing spaces double-quoted). This is intentionally
-    *not* shlex-quoted as one opaque token -- it's meant to be split by the shell into
-    multiple separate flags, exactly as it was when this same string was built inside
-    the old necromerge2-run-mkpmsms wrapper CLI."""
-    def _to_str(x):
-        if isinstance(x, list):
-            return " ".join(map(str, x))
-        s = str(x)
-        return f'"{s}"' if " " in s else s
-    return " ".join(f"--{name} {_to_str(param)}" for name, param in params.items())
 
 
 # --- source node types ---
@@ -134,6 +125,10 @@ class TransmittedPrecursorClusters(MmappetDataset):
 
 class FirstFilterPrecursors(MmappetDataset):
     filename = "first_filter_precursors.mmappet"
+
+
+class PseudomsmsConfig(NodeType):
+    filename = "pseudomsms_config.toml"
 
 
 class Pmsms(MmappetDataset):
@@ -317,10 +312,13 @@ def filter_first_precursors(precursors: TransmittedPrecursorClusters, filter: st
     return FirstFilterPrecursors[filtered]
 
 
+R.text_file("write_pseudomsms_config", PseudomsmsConfig)
+
+
 @R.command(
     "git/ionmaidenmetal/build/mkpmsms --fragments {ms2} --transmitted-precursors {transprec}"
-    " --precursors {filter_mm} --output {pmsms} --method {tofs_extraction_method}"
-    " --threads {threads} --batch 1024 {tofs_extraction_flags}"
+    " --precursors {filter_mm} --output {pmsms} --config {config}"
+    " --threads {threads} --batch 1024"
     " && test -f {pmsms}/schema.txt && test -f {pmsms}/0.bin && test -f {pmsms}/1.bin && test -f {pmsms}/2.bin"
     " && test -f {pmsms}/dataindex.mmappet/schema.txt"
     " && test -f {pmsms}/dataindex.mmappet/0.bin && test -f {pmsms}/dataindex.mmappet/1.bin"
@@ -333,7 +331,7 @@ def filter_first_precursors(precursors: TransmittedPrecursorClusters, filter: st
 )
 def run_mkpmsms_binary(
     ms2: Ms2Events, transprec: TransmittedMs1Events, filter_mm: FirstFilterPrecursors,
-    tofs_extraction_method: str, tofs_extraction_flags: str,
+    config: PseudomsmsConfig,
 ):
     return Pmsms[pmsms]
 
@@ -481,10 +479,9 @@ def sage_pipeline(cfg: dict) -> Pipeline:
         filter=shlex.quote(cfg.precursor_filters.mkpmsms.get("filter", "")),
     )
 
+    P.pseudomsms_config = R.write_pseudomsms_config(text=tomlkit.dumps(cfg.pseudomsms))
     P.pmsms = R.run_mkpmsms_binary(
-        P.ms2_events, P.transmitted_ms1events, P.first_filter_precursors,
-        tofs_extraction_method=cfg.pseudomsms.tofs_extraction_method,
-        tofs_extraction_flags=_cli_flags(cfg.pseudomsms.tofs_extraction_params),
+        P.ms2_events, P.transmitted_ms1events, P.first_filter_precursors, P.pseudomsms_config,
     )
     P.mkpmsms_stats = R.plot_mkpmsms_stats(P.pmsms)
     P.ms2indexed_precursors = R.cut_and_index_precursors(P.first_filter_precursors, P.pmsms)
