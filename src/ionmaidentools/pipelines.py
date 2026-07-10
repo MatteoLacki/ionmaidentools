@@ -230,8 +230,8 @@ def tdf2tof2mz(tdf: BrukerD, ms2: Ms2Events):
 R.text_file("write_scale_estimation_config", ScaleEstimationConfig)
 
 
-@R.command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats} --dataset_name {dataset}")
-def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig, dataset: str):
+@R.command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}")
+def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
     return ArgmaxSample[argmaxes], ArgmaxSieveStats[stats]
 
 
@@ -242,11 +242,10 @@ def extract_ms1_sample_tensors(ms1: Ms1Events, argmaxes: ArgmaxSample, config: S
 
 @R.command(
     "venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {stats} {tensors} {config} {scales}"
-    " --dataset_name {dataset}"
 )
 def fit_ms1_scale_estimates(
     argmaxes: ArgmaxSample, stats: ArgmaxSieveStats, tensors: SampleTensors,
-    config: ScaleEstimationConfig, dataset: str,
+    config: ScaleEstimationConfig,
 ):
     return ScaleEstimates[scales]
 
@@ -254,9 +253,9 @@ def fit_ms1_scale_estimates(
 R.text_file("write_precursor_candidate_selection_config", PrecursorCandidateSelectionConfig)
 
 
-@R.command("venvs/common/bin/ms1_select_candidates {ms1} {scale_estimates} {config} {clusters} --dataset_name {dataset}")
+@R.command("venvs/common/bin/ms1_select_candidates {ms1} {scale_estimates} {config} {clusters}")
 def select_precursor_candidates(
-    ms1: Ms1Events, scale_estimates: ScaleEstimates, config: PrecursorCandidateSelectionConfig, dataset: str,
+    ms1: Ms1Events, scale_estimates: ScaleEstimates, config: PrecursorCandidateSelectionConfig,
 ):
     return RawPrecursorClusters[clusters]
 
@@ -266,11 +265,10 @@ R.text_file("write_postprocessing_config", PostprocessingConfig)
 
 @R.command(
     "venvs/common/bin/ms1_postprocess_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {clusters}"
-    " --dataset_name {dataset}"
 )
 def postprocess_precursor_candidates(
     tdf: BrukerD, ms1: Ms1Events, candidates: RawPrecursorClusters, scale_estimates: ScaleEstimates,
-    config: PostprocessingConfig, dataset: str,
+    config: PostprocessingConfig,
 ):
     return PostprocessedPrecursorClusters[clusters]
 
@@ -393,7 +391,6 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     """tof-filtered Sage search chain reproducing the old short_test Snakemake target."""
     cfg = DotDict.Recursive(cfg)
     P = Pipeline()
-    dataset = Path(cfg.tdf_path).stem
 
     P.tdf = R.source_bruker_d(path=cfg.tdf_path)
     P.fasta = R.source_fasta(path=cfg.fasta_path)
@@ -404,24 +401,24 @@ def sage_pipeline(cfg: dict) -> Pipeline:
 
     se = cfg.scale_estimation
     P.scale_estimation_config = R.write_scale_estimation_config(text=tomlkit.dumps(se))
-    P.argmaxes, P.argmax_sieve_stats = R.find_ms1_argmaxes(P.ms1_events, P.scale_estimation_config, dataset=dataset)
+    P.argmaxes, P.argmax_sieve_stats = R.find_ms1_argmaxes(P.ms1_events, P.scale_estimation_config)
     P.sample_tensors = R.extract_ms1_sample_tensors(P.ms1_events, P.argmaxes, P.scale_estimation_config)
     P.scale_estimates = R.fit_ms1_scale_estimates(
-        P.argmaxes, P.argmax_sieve_stats, P.sample_tensors, P.scale_estimation_config, dataset=dataset,
+        P.argmaxes, P.argmax_sieve_stats, P.sample_tensors, P.scale_estimation_config,
     )
 
     P.precursor_candidate_selection_config = R.write_precursor_candidate_selection_config(
         text=tomlkit.dumps(cfg.precursor_candidate_selection)
     )
     P.raw_precursor_clusters = R.select_precursor_candidates(
-        P.ms1_events, P.scale_estimates, P.precursor_candidate_selection_config, dataset=dataset,
+        P.ms1_events, P.scale_estimates, P.precursor_candidate_selection_config,
     )
 
     P.postprocessing_config = R.write_postprocessing_config(
         text=tomlkit.dumps(cfg.postprocessing_of_precursors)
     )
     P.postprocessed_precursor_clusters = R.postprocess_precursor_candidates(
-        P.tdf, P.ms1_events, P.raw_precursor_clusters, P.scale_estimates, P.postprocessing_config, dataset=dataset,
+        P.tdf, P.ms1_events, P.raw_precursor_clusters, P.scale_estimates, P.postprocessing_config,
     )
 
     P.precursor_transmission_config = R.write_precursor_transmission_config(
