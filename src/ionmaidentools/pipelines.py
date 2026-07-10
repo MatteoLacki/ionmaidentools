@@ -21,9 +21,11 @@ now feeds it `cfg.pseudomsms` directly, same as the Python tools, and `_cli_flag
 Every rule invokes a real installed CLI directly (no custom Python wrapper CLIs) except
 `necromerge2-run-sage`, which runs Sage's compiled binary and writes a run_info.json
 sidecar (its own JSON config file is generated separately by `write_sage_config` straight
-from `cfg.sage`, which already matches Sage's config schema 1:1), and
-`necromerge2-stage-sage-input`, which stages Sage's spectra input directory (a real
-co-location requirement of Sage's own input format).
+from `cfg.sage`, which already matches Sage's config schema 1:1). Sage's binary still
+requires its spectra input co-located in one directory with fixed filenames, so `run_sage`'s
+own command builds a throwaway staging directory under necroflow's `{workdir}` (symlinks for
+the two mmappet dirs, one inline mmappet-to-parquet conversion for precursors), runs Sage
+against it, then removes it -- no separate staging rule or CLI needed.
 
 TODO(regression-db): the old Snakemake `sage_summarize`/`short_test` rules recorded
 results into a SQLite regression DB and did an interactive baseline comparison. Neither
@@ -169,10 +171,6 @@ class TofFilteredPmsms(MmappetDataset):
 
 class TofFilteredPrecursors(MmappetDataset):
     filename = "tof_filtered_precursors.mmappet"
-
-
-class SageInputStaged(NodeType):
-    filename = "sage_input.pmsms"
 
 
 class SageConfig(NodeType):
@@ -365,16 +363,22 @@ def materialize_tof_filtered_pmsms(
     return TofFilteredPmsms[pmsms_out], TofFilteredPrecursors[precursors_out]
 
 
-@R.command(".venv/bin/necromerge2-stage-sage-input {pmsms} {tof2mz} {precursors} {staged}")
-def make_tof_filtered_sage_input(pmsms: TofFilteredPmsms, tof2mz: Tof2Mz, precursors: TofFilteredPrecursors):
-    return SageInputStaged[staged]
-
-
 R.text_file("write_sage_config", SageConfig)
 
 
-@R.command(".venv/bin/necromerge2-run-sage {spectra} {fasta} {sage_config} {outdir} {run_info}")
-def run_sage(spectra: SageInputStaged, fasta: Fasta, sage_config: SageConfig):
+@R.command(
+    "mkdir -p {workdir}/sage_inputs"
+    " && ln -s $(realpath {pmsms}) {workdir}/sage_inputs/pmsms.mmappet"
+    " && ln -s $(realpath {tof2mz}) {workdir}/sage_inputs/tof2mz.mmappet"
+    " && venvs/common/bin/python -c"
+    " \"import mmappet; mmappet.open_dataset('{precursors}').to_parquet('{workdir}/sage_inputs/precursors.parquet', index=False)\""
+    " && .venv/bin/necromerge2-run-sage {workdir}/sage_inputs {fasta} {sage_config} {outdir} {run_info}"
+    " && rm -rf {workdir}/sage_inputs"
+)
+def run_sage(
+    pmsms: TofFilteredPmsms, tof2mz: Tof2Mz, precursors: TofFilteredPrecursors,
+    fasta: Fasta, sage_config: SageConfig,
+):
     return SageRawOutdir[outdir], SageRunInfo[run_info]
 
 
@@ -455,11 +459,11 @@ def sage_pipeline(cfg: dict) -> Pipeline:
         P.pmsms, P.pre_sage_filtered_precursors, P.neighbor_score,
         score_margin=cfg.tof_score_filter.score_margin,
     )
-    P.sage_input = R.make_tof_filtered_sage_input(P.tof_filtered_pmsms, P.tof2mz, P.tof_filtered_precursors)
-
     P.sage_config = R.write_sage_config(
         text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
     )
-    P.sage_raw_outdir, P.sage_run_info = R.run_sage(P.sage_input, P.fasta, P.sage_config)
+    P.sage_raw_outdir, P.sage_run_info = R.run_sage(
+        P.tof_filtered_pmsms, P.tof2mz, P.tof_filtered_precursors, P.fasta, P.sage_config,
+    )
     P.sage_summary = R.sage_summarize(P.sage_raw_outdir)
     return P
