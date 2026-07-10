@@ -32,6 +32,7 @@ import tomlkit
 
 from dictodot import DotDict
 from necroflow import NodeType, Pipeline, Rules
+from pathlib import Path
 
 R = Rules()
 
@@ -68,6 +69,12 @@ class Fasta(NodeType):
     filename = "fasta.fasta"
 
 
+class MmappetDataset(NodeType):
+    """Base type for outputs that are mmappet directories (see CLAUDE.md's
+    "Precursor table format" convention). No `filename` of its own -- every
+    concrete mmappet output subclasses this and sets its own."""
+
+
 # --- compute artifact node types ---
 class Ms1Events(NodeType):
     filename = "events.ms1"
@@ -77,7 +84,7 @@ class Ms2Events(NodeType):
     filename = "events.ms2"
 
 
-class Tof2Mz(NodeType):
+class Tof2Mz(MmappetDataset):
     filename = "tof2mz.mmappet"
 
 
@@ -101,7 +108,7 @@ class PrecursorCandidateSelectionConfig(NodeType):
     filename = "precursor_candidate_selection_config.toml"
 
 
-class RawPrecursorClusters(NodeType):
+class RawPrecursorClusters(MmappetDataset):
     filename = "raw_precursor_clusters.mmappet"
 
 
@@ -109,7 +116,7 @@ class PostprocessingConfig(NodeType):
     filename = "postprocessing_config.toml"
 
 
-class PostprocessedPrecursorClusters(NodeType):
+class PostprocessedPrecursorClusters(MmappetDataset):
     filename = "postprocessed_precursor_clusters.mmappet"
 
 
@@ -121,15 +128,15 @@ class TransmittedMs1Events(NodeType):
     filename = "transmitted_ms1events"
 
 
-class TransmittedPrecursorClusters(NodeType):
+class TransmittedPrecursorClusters(MmappetDataset):
     filename = "transmitted_precursors.mmappet"
 
 
-class FirstFilterPrecursors(NodeType):
+class FirstFilterPrecursors(MmappetDataset):
     filename = "first_filter_precursors.mmappet"
 
 
-class Pmsms(NodeType):
+class Pmsms(MmappetDataset):
     filename = "pmsms.mmappet"
 
 
@@ -137,11 +144,11 @@ class MkpmsmsStats(NodeType):
     filename = "ms2peakpicking_stats.txt"
 
 
-class Ms2IndexedPrecursors(NodeType):
+class Ms2IndexedPrecursors(MmappetDataset):
     filename = "ms2indexed_precursors.mmappet"
 
 
-class PreSageFilteredPrecursors(NodeType):
+class PreSageFilteredPrecursors(MmappetDataset):
     filename = "pre_sage_filtered_precursors.mmappet"
 
 
@@ -157,7 +164,7 @@ class PrecursorNeighborsCsr(NodeType):
     filename = "precursor_neighbors_csr"
 
 
-class NeighborScore(NodeType):
+class NeighborScore(MmappetDataset):
     filename = "neighbor_score.mmappet"
 
 
@@ -165,7 +172,7 @@ class TofFilteredPmsms(NodeType):
     filename = "tof_filtered_pmsms"
 
 
-class TofFilteredPrecursors(NodeType):
+class TofFilteredPrecursors(MmappetDataset):
     filename = "tof_filtered_precursors.mmappet"
 
 
@@ -428,7 +435,7 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     """tof-filtered Sage search chain reproducing the old short_test Snakemake target."""
     cfg = DotDict.Recursive(cfg)
     P = Pipeline()
-    dataset = cfg.dataset
+    dataset = Path(cfg.tdf_path).stem
 
     P.tdf = R.source_bruker_d(path=cfg.tdf_path)
     P.fasta = R.source_fasta(path=cfg.fasta_path)
