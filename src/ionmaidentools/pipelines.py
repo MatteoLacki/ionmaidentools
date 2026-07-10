@@ -139,10 +139,6 @@ class Pmsms(MmappetDataset):
     filename = "pmsms.mmappet"
 
 
-class MkpmsmsStats(NodeType):
-    filename = "ms2peakpicking_stats.txt"
-
-
 class Ms2IndexedPrecursors(MmappetDataset):
     filename = "ms2indexed_precursors.mmappet"
 
@@ -437,7 +433,6 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     P.pmsms = R.run_mkpmsms_binary(
         P.ms2_events, P.transmitted_ms1events, P.first_filter_precursors, P.pseudomsms_config,
     )
-    P.mkpmsms_stats = R.plot_mkpmsms_stats(P.pmsms)
     P.ms2indexed_precursors = R.cut_and_index_precursors(P.first_filter_precursors, P.pmsms)
 
     P.pre_sage_filtered_precursors = R.filter_pre_sage_precursors(
