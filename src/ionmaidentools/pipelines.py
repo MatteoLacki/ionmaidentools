@@ -83,8 +83,12 @@ class ScaleEstimationConfig(NodeType):
     filename = "scale_estimation_config.toml"
 
 
-class ArgmaxSample(NodeType):
-    filename = "argmax_sample"
+class ArgmaxSample(MmappetDataset):
+    filename = "argmax_sample.mmappet"
+
+
+class ArgmaxSieveStats(NodeType):
+    filename = "sieve_stats.toml"
 
 
 class SampleTensors(NodeType):
@@ -226,9 +230,9 @@ def tdf2tof2mz(tdf: BrukerD, ms2: Ms2Events):
 R.text_file("write_scale_estimation_config", ScaleEstimationConfig)
 
 
-@R.command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} --dataset_name {dataset}")
+@R.command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats} --dataset_name {dataset}")
 def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig, dataset: str):
-    return ArgmaxSample[argmaxes]
+    return ArgmaxSample[argmaxes], ArgmaxSieveStats[stats]
 
 
 @R.command(
@@ -242,9 +246,13 @@ def extract_ms1_sample_tensors(
     return SampleTensors[tensors]
 
 
-@R.command("venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {tensors} {config} {scales} --dataset_name {dataset}")
+@R.command(
+    "venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {stats} {tensors} {config} {scales}"
+    " --dataset_name {dataset}"
+)
 def fit_ms1_scale_estimates(
-    argmaxes: ArgmaxSample, tensors: SampleTensors, config: ScaleEstimationConfig, dataset: str,
+    argmaxes: ArgmaxSample, stats: ArgmaxSieveStats, tensors: SampleTensors,
+    config: ScaleEstimationConfig, dataset: str,
 ):
     return ScaleEstimates[scales]
 
@@ -402,13 +410,13 @@ def sage_pipeline(cfg: dict) -> Pipeline:
 
     se = cfg.scale_estimation
     P.scale_estimation_config = R.write_scale_estimation_config(text=tomlkit.dumps(se))
-    P.argmaxes = R.find_ms1_argmaxes(P.ms1_events, P.scale_estimation_config, dataset=dataset)
+    P.argmaxes, P.argmax_sieve_stats = R.find_ms1_argmaxes(P.ms1_events, P.scale_estimation_config, dataset=dataset)
     P.sample_tensors = R.extract_ms1_sample_tensors(
         P.ms1_events, P.argmaxes,
         radii_tof=se.radii.tof, radii_urt=se.radii.urt, radii_scan=se.radii.scan,
     )
     P.scale_estimates = R.fit_ms1_scale_estimates(
-        P.argmaxes, P.sample_tensors, P.scale_estimation_config, dataset=dataset,
+        P.argmaxes, P.argmax_sieve_stats, P.sample_tensors, P.scale_estimation_config, dataset=dataset,
     )
 
     P.precursor_candidate_selection_config = R.write_precursor_candidate_selection_config(
