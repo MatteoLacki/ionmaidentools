@@ -187,26 +187,6 @@ class SageRunInfo(NodeType):
     filename = "run_info.json"
 
 
-class SageResultsJson(NodeType):
-    filename = "results.json"
-
-
-class SagePrecursorsParquet(NodeType):
-    filename = "results.sage.parquet"
-
-
-class SageMatchedFragmentsParquet(NodeType):
-    filename = "matched_fragments.sage.parquet"
-
-
-class SagePin(NodeType):
-    filename = "results.sage.pin"
-
-
-class SagePrecursorsAfterFdr(NodeType):
-    filename = "results.sage.fdr.parquet"
-
-
 class SageSummary(NodeType):
     filename = "results.sage.summary.tsv"
 
@@ -402,30 +382,8 @@ def run_sage(spectra: SageInputStaged, fasta: Fasta, sage_config: SageConfig):
     return SageRawOutdir[outdir], SageRunInfo[run_info]
 
 
-@R.command(
-    "cp {sage_dir}/results.json {results_json}"
-    " && cp {sage_dir}/results.sage.pin {pin}"
-    " && venvs/common/bin/tsv2parquet {sage_dir}/results.sage.tsv {precursors}"
-    " && venvs/common/bin/df_head {precursors}"
-    " && venvs/common/bin/tsv2parquet {sage_dir}/matched_fragments.sage.tsv {fragments}"
-    " && venvs/common/bin/df_head {fragments}"
-)
-def extract_sage_results(sage_dir: SageRawOutdir):
-    return (
-        SageResultsJson[results_json],
-        SagePrecursorsParquet[precursors],
-        SageMatchedFragmentsParquet[fragments],
-        SagePin[pin],
-    )
-
-
-@R.command("venvs/common/bin/sage-filter {precursors} {filtered} --fdr 0.01 && venvs/common/bin/df_head {filtered}")
-def sage_filter(precursors: SagePrecursorsParquet):
-    return SagePrecursorsAfterFdr[filtered]
-
-
-@R.command("venvs/common/bin/sage-summarize {filtered} {summary}")
-def sage_summarize(filtered: SagePrecursorsAfterFdr):
+@R.command("venvs/common/bin/sage-summarize-raw {sage_dir}/results.sage.tsv {summary} --fdr 0.01")
+def sage_summarize(sage_dir: SageRawOutdir):
     return SageSummary[summary]
 
 
@@ -512,7 +470,5 @@ def sage_pipeline(cfg: dict) -> Pipeline:
         text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
     )
     P.sage_raw_outdir, P.sage_run_info = R.run_sage(P.sage_input, P.fasta, P.sage_config)
-    P.results_json, P.sage_precursors, P.matched_fragments, P.sage_pin = R.extract_sage_results(P.sage_raw_outdir)
-    P.sage_precursors_after_fdr = R.sage_filter(P.sage_precursors)
-    P.sage_summary = R.sage_summarize(P.sage_precursors_after_fdr)
+    P.sage_summary = R.sage_summarize(P.sage_raw_outdir)
     return P
