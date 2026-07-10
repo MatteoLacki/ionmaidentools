@@ -91,8 +91,8 @@ class ArgmaxSieveStats(NodeType):
     filename = "sieve_stats.toml"
 
 
-class SampleTensors(NodeType):
-    filename = "sample_tensors"
+class SampleTensors(MmappetDataset):
+    filename = "sample_tensors.mmappet"
 
 
 class ScaleEstimates(NodeType):
@@ -119,8 +119,8 @@ class PrecursorTransmissionConfig(NodeType):
     filename = "precursor_transmission_config.toml"
 
 
-class TransmittedMs1Events(NodeType):
-    filename = "transmitted_ms1events"
+class TransmittedMs1Events(MmappetDataset):
+    filename = "transmitted_ms1events.mmappet"
 
 
 class TransmittedPrecursorClusters(MmappetDataset):
@@ -167,8 +167,8 @@ class NeighborScore(MmappetDataset):
     filename = "neighbor_score.mmappet"
 
 
-class TofFilteredPmsms(NodeType):
-    filename = "tof_filtered_pmsms"
+class TofFilteredPmsms(MmappetDataset):
+    filename = "tof_filtered_pmsms.mmappet"
 
 
 class TofFilteredPrecursors(MmappetDataset):
