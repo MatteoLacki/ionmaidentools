@@ -18,18 +18,19 @@ the same treatment the other direction: it previously had no config-file option 
 to-flags helper, ported verbatim from the old Snakemake rule), so `--config <path.toml>`
 was added to its shared `ParamTree` CLI parser (`param_tree.hpp`) -- `write_pseudomsms_config`
 now feeds it `cfg.pseudomsms` directly, same as the Python tools, and `_cli_flags` is gone.
-Every rule invokes a real installed CLI directly (no custom Python wrapper CLIs) except
-`necromerge2-run-sage`, which runs Sage's compiled binary and writes a run_info.json
-sidecar (its own JSON config file is generated separately by `write_sage_config` straight
-from `cfg.sage`, which already matches Sage's config schema 1:1). Sage's binary still
-requires its spectra input co-located in one directory with fixed filenames, so `run_sage`'s
-own command builds a throwaway staging directory under necroflow's `{workdir}` (symlinks for
-the two mmappet dirs, one inline mmappet-to-parquet conversion for precursors), runs Sage
-against it, then removes it -- no separate staging rule or CLI needed.
+Every rule invokes a real installed CLI directly (no custom Python wrapper CLIs). Sage's
+own JSON config file is generated separately by `write_sage_config` straight from
+`cfg.sage`, which already matches Sage's config schema 1:1. `run_sage` passes the pmsms,
+tof2mz, and precursors mmappet datasets straight to Sage's `--pmsms`/`--tof2mz`/
+`--precursors` flags (`software/sage/devel_fixed`, a patched fork -- upstream Sage only
+takes mzML/MGF/TDF paths and reads `precursors.parquet` from a fixed-filename directory;
+this fork reads all three inputs as explicit paths, precursors as `.mmappet` directly, no
+staging directory or format conversion needed) and validates the expected output files
+exist.
 
 TODO(regression-db): the old Snakemake `sage_summarize`/`short_test` rules recorded
 results into a SQLite regression DB and did an interactive baseline comparison. Neither
-is ported here -- `sage_run_info`/`sage_summary` are the pipeline's terminal outputs.
+is ported here -- `sage_summary` is the pipeline's terminal output.
 """
 from __future__ import annotations
 
@@ -179,10 +180,6 @@ class SageConfig(NodeType):
 
 class SageRawOutdir(NodeType):
     filename = "sage_raw_outdir"
-
-
-class SageRunInfo(NodeType):
-    filename = "run_info.json"
 
 
 class SageSummary(NodeType):
@@ -367,23 +364,22 @@ R.text_file("write_sage_config", SageConfig)
 
 
 @R.command(
-    "mkdir -p {workdir}/sage_inputs"
-    " && ln -s $(realpath {pmsms}) {workdir}/sage_inputs/pmsms.mmappet"
-    " && ln -s $(realpath {tof2mz}) {workdir}/sage_inputs/tof2mz.mmappet"
-    " && venvs/common/bin/python -c"
-    " \"import mmappet; mmappet.open_dataset('{precursors}').to_parquet('{workdir}/sage_inputs/precursors.parquet', index=False)\""
-    " && .venv/bin/necromerge2-run-sage {workdir}/sage_inputs {fasta} {sage_config} {outdir} {run_info}"
-    " && rm -rf {workdir}/sage_inputs"
+    "software/sage/devel_fixed/sage --version"
+    " && software/sage/devel_fixed/sage -f {fasta} --annotate-matches --write-pin"
+    " --output_directory {outdir} --pmsms {pmsms} --tof2mz {tof2mz} --precursors {precursors}"
+    " {sage_config}"
+    " && test -f {outdir}/results.json && test -f {outdir}/results.sage.pin"
+    " && test -f {outdir}/results.sage.tsv && test -f {outdir}/matched_fragments.sage.tsv"
 )
 def run_sage(
     pmsms: TofFilteredPmsms, tof2mz: Tof2Mz, precursors: TofFilteredPrecursors,
     fasta: Fasta, sage_config: SageConfig,
 ):
-    return SageRawOutdir[outdir], SageRunInfo[run_info]
+    return SageRawOutdir[outdir]
 
 
-@R.command("venvs/common/bin/sage-summarize-raw {sage_dir}/results.sage.tsv {summary} --fdr 0.01")
-def sage_summarize(sage_dir: SageRawOutdir):
+@R.command("venvs/common/bin/sage-summarize-raw {sage_dir}/results.sage.tsv {summary} --fdr {fdr}")
+def sage_summarize(sage_dir: SageRawOutdir, fdr: int | float):
     return SageSummary[summary]
 
 
@@ -399,8 +395,7 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     P.ms2_events = R.tdf2ms2(P.tdf)
     P.tof2mz = R.tdf2tof2mz(P.tdf, P.ms2_events)
 
-    se = cfg.scale_estimation
-    P.scale_estimation_config = R.write_scale_estimation_config(text=tomlkit.dumps(se))
+    P.scale_estimation_config = R.write_scale_estimation_config(text=tomlkit.dumps(cfg.scale_estimation))
     P.argmaxes, P.argmax_sieve_stats = R.find_ms1_argmaxes(P.ms1_events, P.scale_estimation_config)
     P.sample_tensors = R.extract_ms1_sample_tensors(P.ms1_events, P.argmaxes, P.scale_estimation_config)
     P.scale_estimates = R.fit_ms1_scale_estimates(
@@ -462,8 +457,8 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     P.sage_config = R.write_sage_config(
         text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
     )
-    P.sage_raw_outdir, P.sage_run_info = R.run_sage(
+    P.sage_raw_outdir = R.run_sage(
         P.tof_filtered_pmsms, P.tof2mz, P.tof_filtered_precursors, P.fasta, P.sage_config,
     )
-    P.sage_summary = R.sage_summarize(P.sage_raw_outdir)
+    P.sage_summary = R.sage_summarize(P.sage_raw_outdir, fdr=cfg.sage_summarize.fdr)
     return P

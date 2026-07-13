@@ -22,10 +22,6 @@ dev = [
 ]
 
 
-[project.scripts]
-necromerge2-stage-sage-input = "ionmaidentools.cli.necromerge2_stage_sage_input:main"
-necromerge2-run-sage = "ionmaidentools.cli.necromerge2_run_sage:main"
-
 [project.urls]
 homepage="https://github.com/MatteoLacki/ionmaidentools.git"
 repository="https://github.com/MatteoLacki/ionmaidentools.git"
