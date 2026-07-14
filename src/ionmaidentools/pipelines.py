@@ -25,18 +25,34 @@ tof2mz, and precursors mmappet datasets straight to Sage's `--pmsms`/`--tof2mz`/
 `--precursors` flags (`software/sage/devel_fixed`, a patched fork -- upstream Sage only
 takes mzML/MGF/TDF paths and reads `precursors.parquet` from a fixed-filename directory;
 this fork reads all three inputs as explicit paths, precursors as `.mmappet` directly, no
-staging directory or format conversion needed) and validates the expected output files
-exist.
+staging directory or format conversion needed). Sage's four fixed-name output files
+(`results.json`, `results.sage.pin`, `results.sage.tsv`, `matched_fragments.sage.tsv`)
+are each their own typed necroflow output -- written straight into the rule call's shared
+`{workdir}`, not wrapped in an opaque directory NodeType, since `SageResultsJson`/
+`SageResultsPin`/`SageResultsTsv`/`SageMatchedFragments`'s filenames already match what
+Sage itself writes there.
 
 TODO(regression-db): the old Snakemake `sage_summarize`/`short_test` rules recorded
 results into a SQLite regression DB and did an interactive baseline comparison. Neither
 is ported here -- `sage_summary` is the pipeline's terminal output.
+
+Optional m/z recalibration: when a job config has a `[recalibration]` section,
+`sage_pipeline` runs Sage twice. The first (calibration) pass searches a selected subset
+of `tof_filtered_precursors` (`select_recalibration_precursors`, default top-K most
+intense, configurable via `[recalibration_precursor_selection]`) against the original
+`tof2mz`. Its confident, top-ranked, FDR-filtered PSMs are used by `recalibrate_mz`
+(`searchops.recalibration`) to fit a ppm-error-vs-m/z correction and apply it to
+`tof2mz` (a single dense ToF-bin-indexed lookup array shared by precursors and
+fragments), and to derive narrower `precursor_tol`/`fragment_tol` bounds
+(`update_sage_config`, via two chained `necroflow.tools.config_set` calls). The second,
+final pass re-runs Sage with the corrected `tof2mz`, the *full* (unfiltered)
+`tof_filtered_precursors`, and the narrowed config. Jobs without `[recalibration]` keep
+today's single-pass behaviour untouched.
 """
 from __future__ import annotations
 
 import json
 import os
-import shlex
 import tomlkit
 
 from dictodot import DotDict
@@ -178,12 +194,43 @@ class SageConfig(NodeType):
     filename = "sage_config.json"
 
 
-class SageRawOutdir(NodeType):
-    filename = "sage_raw_outdir"
+class SageResultsJson(NodeType):
+    filename = "results.json"
+
+
+class SageResultsPin(NodeType):
+    filename = "results.sage.pin"
+
+
+class SageResultsTsv(NodeType):
+    filename = "results.sage.tsv"
+
+
+class SageMatchedFragments(NodeType):
+    filename = "matched_fragments.sage.tsv"
 
 
 class SageSummary(NodeType):
     filename = "results.sage.summary.tsv"
+
+
+class RecalibrationPrecursorSelectionConfig(NodeType):
+    filename = "recalibration_precursor_selection_config.toml"
+
+
+class RecalibrationPrecursors(TofFilteredPrecursors):
+    """A subset of TofFilteredPrecursors -- accepted wherever it is, e.g. run_sage's
+    `precursors` input for the calibration-only pass."""
+
+    filename = "recalibration_precursors.mmappet"
+
+
+class RecalibrationConfig(NodeType):
+    filename = "recalibration_config.toml"
+
+
+class RecalibrationTolerance(NodeType):
+    filename = "recalibration_tolerance.json"
 
 
 # --- source rules (symlink pre-existing files/dirs, no validation) ---
@@ -360,26 +407,70 @@ def materialize_tof_filtered_pmsms(
     return TofFilteredPmsms[pmsms_out], TofFilteredPrecursors[precursors_out]
 
 
+R.text_file("write_recalibration_precursor_selection_config", RecalibrationPrecursorSelectionConfig)
+
+
+@R.command(
+    "venvs/common/bin/python -m timstofu.cli.select_recalibration_precursors"
+    " {precursors} {config} {selected}"
+)
+def select_recalibration_precursors(
+    precursors: TofFilteredPrecursors, config: RecalibrationPrecursorSelectionConfig,
+):
+    return RecalibrationPrecursors[selected]
+
+
+R.text_file("write_recalibration_config", RecalibrationConfig)
+
+
+@R.command(
+    "venvs/common/bin/recalibrate-mz {sage_results_tsv} {tof2mz}"
+    " {recalibrated_tof2mz} {tolerance} --config {config} --fdr {fdr}"
+)
+def recalibrate_mz(
+    sage_results_tsv: SageResultsTsv, tof2mz: Tof2Mz, config: RecalibrationConfig,
+    fdr: int | float,
+):
+    return Tof2Mz[recalibrated_tof2mz], RecalibrationTolerance[tolerance]
+
+
+@R.command(
+    ".venv/bin/python -m necroflow.tools.config_set"
+    " {sage_config} {workdir}/precursor_tol_updated.json"
+    " --target precursor_tol --source {tolerance} --source-field precursor_tol"
+    " && .venv/bin/python -m necroflow.tools.config_set"
+    " {workdir}/precursor_tol_updated.json {recalibrated_sage_config}"
+    " --target fragment_tol --source {tolerance} --source-field fragment_tol"
+)
+def update_sage_config(sage_config: SageConfig, tolerance: RecalibrationTolerance):
+    return SageConfig[recalibrated_sage_config]
+
+
 R.text_file("write_sage_config", SageConfig)
 
 
 @R.command(
     "software/sage/devel_fixed/sage --version"
     " && software/sage/devel_fixed/sage -f {fasta} --annotate-matches --write-pin"
-    " --output_directory {outdir} --pmsms {pmsms} --tof2mz {tof2mz} --precursors {precursors}"
+    " --output_directory {workdir} --pmsms {pmsms} --tof2mz {tof2mz} --precursors {precursors}"
     " {sage_config}"
-    " && test -f {outdir}/results.json && test -f {outdir}/results.sage.pin"
-    " && test -f {outdir}/results.sage.tsv && test -f {outdir}/matched_fragments.sage.tsv"
+    " && test -f {results_json} && test -f {results_pin}"
+    " && test -f {results_tsv} && test -f {matched_fragments}"
 )
 def run_sage(
     pmsms: TofFilteredPmsms, tof2mz: Tof2Mz, precursors: TofFilteredPrecursors,
     fasta: Fasta, sage_config: SageConfig,
 ):
-    return SageRawOutdir[outdir]
+    return (
+        SageResultsJson[results_json],
+        SageResultsPin[results_pin],
+        SageResultsTsv[results_tsv],
+        SageMatchedFragments[matched_fragments],
+    )
 
 
-@R.command("venvs/common/bin/sage-summarize-raw {sage_dir}/results.sage.tsv {summary} --fdr {fdr}")
-def sage_summarize(sage_dir: SageRawOutdir, fdr: int | float):
+@R.command("venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}")
+def sage_summarize(sage_results_tsv: SageResultsTsv, fdr: int | float):
     return SageSummary[summary]
 
 
@@ -388,13 +479,16 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     cfg = DotDict.Recursive(cfg)
     P = Pipeline()
 
+    P.section("Acquisition")
     P.tdf = R.source_bruker_d(path=cfg.tdf_path)
     P.fasta = R.source_fasta(path=cfg.fasta_path)
 
+    P.section("Raw Extraction")
     P.ms1_events = R.tdf2ms1(P.tdf)
     P.ms2_events = R.tdf2ms2(P.tdf)
     P.tof2mz = R.tdf2tof2mz(P.tdf, P.ms2_events)
 
+    P.section("MS1 Scale Calibration")
     P.scale_estimation_config = R.write_scale_estimation_config(text=tomlkit.dumps(cfg.scale_estimation))
     P.argmaxes, P.argmax_sieve_stats = R.find_ms1_argmaxes(P.ms1_events, P.scale_estimation_config)
     P.sample_tensors = R.extract_ms1_sample_tensors(P.ms1_events, P.argmaxes, P.scale_estimation_config)
@@ -402,6 +496,7 @@ def sage_pipeline(cfg: dict) -> Pipeline:
         P.argmaxes, P.argmax_sieve_stats, P.sample_tensors, P.scale_estimation_config,
     )
 
+    P.section("Precursor Selection")
     P.precursor_candidate_selection_config = R.write_precursor_candidate_selection_config(
         text=tomlkit.dumps(cfg.precursor_candidate_selection)
     )
@@ -409,6 +504,7 @@ def sage_pipeline(cfg: dict) -> Pipeline:
         P.ms1_events, P.scale_estimates, P.precursor_candidate_selection_config,
     )
 
+    P.section("Precursor Postprocessing")
     P.postprocessing_config = R.write_postprocessing_config(
         text=tomlkit.dumps(cfg.postprocessing_of_precursors)
     )
@@ -416,6 +512,7 @@ def sage_pipeline(cfg: dict) -> Pipeline:
         P.tdf, P.ms1_events, P.raw_precursor_clusters, P.scale_estimates, P.postprocessing_config,
     )
 
+    P.section("Precursor Transmission")
     P.precursor_transmission_config = R.write_precursor_transmission_config(
         text=tomlkit.dumps(cfg.precursor_transmission)
     )
@@ -425,20 +522,24 @@ def sage_pipeline(cfg: dict) -> Pipeline:
 
     P.first_filter_precursors = R.filter_first_precursors(
         P.transmitted_precursor_clusters,
-        filter=shlex.quote(cfg.precursor_filters.mkpmsms.get("filter", "")),
+        filter=cfg.precursor_filters.mkpmsms.get("filter", ""),
     )
 
+    P.section("Pseudo-MS/MS Assembly")
     P.pseudomsms_config = R.write_pseudomsms_config(text=tomlkit.dumps(cfg.pseudomsms))
     P.pmsms = R.run_mkpmsms_binary(
         P.ms2_events, P.transmitted_ms1events, P.first_filter_precursors, P.pseudomsms_config,
     )
+
+    P.section("Precursor Indexing")
     P.ms2indexed_precursors = R.cut_and_index_precursors(P.first_filter_precursors, P.pmsms)
 
     P.pre_sage_filtered_precursors = R.filter_pre_sage_precursors(
         P.ms2indexed_precursors,
-        filter=shlex.quote(cfg.precursor_filters.pre_sage.get("filter", "")),
+        filter=cfg.precursor_filters.pre_sage.get("filter", ""),
     )
 
+    P.section("Neighbor Graph")
     P.precursor_neighbors_config = R.write_precursor_neighbors_config(
         text=tomlkit.dumps(cfg.precursor_neighbors)
     )
@@ -448,17 +549,46 @@ def sage_pipeline(cfg: dict) -> Pipeline:
     P.precursor_neighbors_csr = R.compute_precursor_neighbors(
         P.precursor_grid_index, P.tdf, P.precursor_neighbors_config,
     )
+
+    P.section("ToF Score Filtering")
     P.neighbor_score = R.tof_score_filter(P.pmsms, P.precursor_neighbors_csr)
 
     P.tof_filtered_pmsms, P.tof_filtered_precursors = R.materialize_tof_filtered_pmsms(
         P.pmsms, P.pre_sage_filtered_precursors, P.neighbor_score,
         score_margin=cfg.tof_score_filter.score_margin,
     )
+
+    P.section("SAGE Search")
     P.sage_config = R.write_sage_config(
         text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
     )
-    P.sage_raw_outdir = R.run_sage(
-        P.tof_filtered_pmsms, P.tof2mz, P.tof_filtered_precursors, P.fasta, P.sage_config,
-    )
-    P.sage_summary = R.sage_summarize(P.sage_raw_outdir, fdr=cfg.sage_summarize.fdr)
+
+    if "recalibration" in cfg:
+        P.recalibration_precursor_selection_config = R.write_recalibration_precursor_selection_config(
+            text=tomlkit.dumps(cfg.recalibration_precursor_selection)
+        )
+        P.recalibration_precursors = R.select_recalibration_precursors(
+            P.tof_filtered_precursors, P.recalibration_precursor_selection_config,
+        )
+        P.filtered_sage_results_json, P.filtered_sage_results_pin, \
+            P.filtered_sage_results_tsv, P.filtered_sage_matched_fragments = R.run_sage(
+                P.tof_filtered_pmsms, P.tof2mz, P.recalibration_precursors, P.fasta, P.sage_config,
+            )
+        P.recalibration_config = R.write_recalibration_config(text=tomlkit.dumps(cfg.recalibration))
+        P.recalibrated_tof2mz, P.recalibration_tolerance = R.recalibrate_mz(
+            P.filtered_sage_results_tsv, P.tof2mz, P.recalibration_config,
+            fdr=cfg.sage_summarize.fdr,
+        )
+        P.recalibrated_sage_config = R.update_sage_config(P.sage_config, P.recalibration_tolerance)
+        P.sage_results_json, P.sage_results_pin, P.sage_results_tsv, P.sage_matched_fragments = R.run_sage(
+            P.tof_filtered_pmsms, P.recalibrated_tof2mz, P.tof_filtered_precursors, P.fasta,
+            P.recalibrated_sage_config,
+        )
+    else:
+        P.sage_results_json, P.sage_results_pin, P.sage_results_tsv, P.sage_matched_fragments = R.run_sage(
+            P.tof_filtered_pmsms, P.tof2mz, P.tof_filtered_precursors, P.fasta, P.sage_config,
+        )
+
+    P.section("FDR Summary")
+    P.sage_summary = R.sage_summarize(P.sage_results_tsv, fdr=cfg.sage_summarize.fdr)
     return P
