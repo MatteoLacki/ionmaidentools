@@ -1,7 +1,7 @@
 """necroflow migration of necromerge2's Snakemake `short_test` chain.
 
 First-pass scope only: tof-filtered branch, through `sage_summarize`. Plain-MGF/mzML,
-FragPipe, `studies.smk`, and the `configs.smk` config generator are not ported.
+`studies.smk`, and the `configs.smk` config generator are not ported.
 
 Config fields travel as explicit named kwargs, one per fixed config field, straight from
 the job TOML's own parsed dict -- no config file, no blob -- except where a tool's own
@@ -48,6 +48,21 @@ fragments), and to derive narrower `precursor_tol`/`fragment_tol` bounds
 final pass re-runs Sage with the corrected `tof2mz`, the *full* (unfiltered)
 `tof_filtered_precursors`, and the narrowed config. Jobs without `[recalibration]` keep
 today's single-pass behaviour untouched.
+
+Optional FragPipe comparison run: when a job config has a `[fragpipe]` section,
+`sage_pipeline` additionally runs FragPipe on the same `tof_filtered_pmsms`/
+`tof_filtered_precursors`/`tof2mz` Sage already searched, reproducing the old Snakemake
+`search_test` side-by-side comparison. `convert_tof_filtered_to_mzml` (`git/pmsms2mzml`)
+turns those into an mzML + idmap; `cfg.fragpipe.workflow_path` points at a FragPipe
+`.workflow` file, symlinked in as-is (unlike Sage's JSON config, this file is long,
+hand-maintained, and rarely changes -- treated as a data file, not something the
+pipeline dumps or patches; the user is responsible for its `database.db-path=` line
+already pointing at the right fasta). `run_fragpipe` shells out to a fixed, pre-installed
+`software/fragpipe/fragpipe-24.0` install (same fixed-path convention as Sage's own
+`software/sage/devel_fixed`). The old rule's log-scraping is the only result handling
+ported (`extract_fragpipe_log`/`summarize_fragpipe`) -- no run_info.json, no
+regression-DB recording, matching `sage_summarize`'s own current scope. Jobs without
+`[fragpipe]` are unaffected.
 """
 from __future__ import annotations
 
@@ -208,6 +223,38 @@ class SageResultsTsv(NodeType):
 
 class SageMatchedFragments(NodeType):
     filename = "matched_fragments.sage.tsv"
+
+
+class TofFilteredMzml(NodeType):
+    filename = "mzml.mzML"
+
+
+class TofFilteredMzmlIdmap(MmappetDataset):
+    filename = "idmap.mmappet"
+
+
+class FragpipeWorkflow(NodeType):
+    """A hand-maintained FragPipe `.workflow` file -- treated as a data file
+    like Fasta/BrukerD, symlinked in as-is. Never generated or patched by
+    the pipeline (unlike Sage's JSON config)."""
+
+    filename = "fragpipe_workflow.workflow"
+
+
+class FragpipeManifest(NodeType):
+    filename = "fragpipe_manifest.tsv"
+
+
+class FragpipeResultsDir(NodeType):
+    filename = "fragpipe_results"
+
+
+class FragpipeLog(NodeType):
+    filename = "fragpipe_full_log.txt"
+
+
+class FragpipeSummary(NodeType):
+    filename = "fragpipe_summary.txt"
 
 
 class SageSummary(NodeType):
@@ -474,6 +521,52 @@ def sage_summarize(sage_results_tsv: SageResultsTsv, fdr: int | float):
     return SageSummary[summary]
 
 
+@R.command(
+    "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
+    " --tof2mz {tof2mz} --threads {threads} --numpress --zlib-level 9"
+    " && test -f {mzml} && test -f {idmap}/schema.txt",
+    threads=CORES,
+)
+def convert_tof_filtered_to_mzml(
+    pmsms: TofFilteredPmsms, precursors: TofFilteredPrecursors, tof2mz: Tof2Mz,
+):
+    return TofFilteredMzml[mzml], TofFilteredMzmlIdmap[idmap]
+
+
+@R.command("ln -s $(realpath {path}) {workflow}")
+def source_fragpipe_workflow(path: str):
+    return FragpipeWorkflow[workflow]
+
+
+@R.command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
+def write_fragpipe_manifest(mzml: TofFilteredMzml):
+    return FragpipeManifest[manifest]
+
+
+@R.command(
+    "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
+    " --workflow {workflow} --manifest {manifest} --workdir {dir}"
+    " --config-tools-folder software/fragpipe/fragpipe-24.0/tools"
+    ' && test -n "$(ls {dir}/log_*.txt 2>/dev/null)"'
+)
+def run_fragpipe(manifest: FragpipeManifest, workflow: FragpipeWorkflow):
+    return FragpipeResultsDir[dir]
+
+
+@R.command("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
+def extract_fragpipe_log(dir: FragpipeResultsDir):
+    return FragpipeLog[log]
+
+
+@R.command(
+    "grep -m 1 temp {log} > {summary}"
+    " && grep -n 'MASS CALIBRATION' {log} -A 8 >> {summary}"
+    " && grep 'Final report numbers after FDR filtering, and post-processing' {log} >> {summary}"
+)
+def summarize_fragpipe(log: FragpipeLog):
+    return FragpipeSummary[summary]
+
+
 def sage_pipeline(cfg: dict) -> Pipeline:
     """tof-filtered Sage search chain reproducing the old short_test Snakemake target."""
     cfg = DotDict.Recursive(cfg)
@@ -591,4 +684,16 @@ def sage_pipeline(cfg: dict) -> Pipeline:
 
     P.section("FDR Summary")
     P.sage_summary = R.sage_summarize(P.sage_results_tsv, fdr=cfg.sage_summarize.fdr)
+
+    if "fragpipe" in cfg:
+        P.section("FragPipe Search")
+        P.tof_filtered_mzml, P.tof_filtered_mzml_idmap = R.convert_tof_filtered_to_mzml(
+            P.tof_filtered_pmsms, P.tof_filtered_precursors, P.tof2mz,
+        )
+        P.fragpipe_workflow = R.source_fragpipe_workflow(path=cfg.fragpipe.workflow_path)
+        P.fragpipe_manifest = R.write_fragpipe_manifest(P.tof_filtered_mzml)
+        P.fragpipe_results_dir = R.run_fragpipe(P.fragpipe_manifest, P.fragpipe_workflow)
+        P.fragpipe_log = R.extract_fragpipe_log(P.fragpipe_results_dir)
+        P.fragpipe_summary = R.summarize_fragpipe(P.fragpipe_log)
+
     return P
