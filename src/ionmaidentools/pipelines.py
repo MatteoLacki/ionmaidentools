@@ -63,6 +63,18 @@ already pointing at the right fasta). `run_fragpipe` shells out to a fixed, pre-
 ported (`extract_fragpipe_log`/`summarize_fragpipe`) -- no run_info.json, no
 regression-DB recording, matching `sage_summarize`'s own current scope. Jobs without
 `[fragpipe]` are unaffected.
+
+Unlike Sage, FragPipe/Philosopher has no generate-decoys-at-search-time option -- its
+database must already contain them, verified empirically against a real FragPipe 24.0
+install (`philosopher database --custom fasta --nodecoys` fails outright with "Workspace
+not found" without a `workspace --init` first; without decoys at all, MSFragger runs fine
+but Percolator/ProteinProphet error out). `generate_fragpipe_decoy_fasta` covers this via
+FragPipe's own bundled Philosopher tool (`database --custom {fasta} --prefix rev_`,
+matching every bundled `.workflow`'s default `database.decoy-tag=rev_`). It's a
+standalone output (`P.fragpipe_decoy_fasta`), deliberately *not* wired into
+`run_fragpipe` -- keeping it a dependency would mean patching the `.workflow` file's
+`database.db-path=` at run time, reopening the "plain data file, never patched" design
+above. For now, point that line at `generate_fragpipe_decoy_fasta`'s output by hand.
 """
 
 from __future__ import annotations
@@ -256,6 +268,18 @@ class FragpipeLog(NodeType):
 
 class FragpipeSummary(NodeType):
     filename = "fragpipe_summary.txt"
+
+
+class FragpipeDecoyFasta(NodeType):
+    """Target+decoy FASTA via FragPipe's own Philosopher tool (`database
+    --custom ... --prefix rev_`) -- unlike Sage, FragPipe/Philosopher has no
+    generate-decoys-at-search-time option, so the database must already
+    contain them. Standalone output, not wired into `run_fragpipe`: the
+    `.workflow` file stays a plain, hand-maintained data file (see
+    `FragpipeWorkflow`), so pointing `database.db-path=` at this file is the
+    user's responsibility, same as everything else in that file."""
+
+    filename = "decoy_database.fas"
 
 
 class SageSummary(NodeType):
@@ -589,6 +613,26 @@ def source_fragpipe_workflow(path: str):
     return FragpipeWorkflow[workflow]
 
 
+@R.command(
+    # `cd` changes the meaning of every relative path substituted into this
+    # template, including the philosopher binary's own repo-relative path and
+    # {decoy_fasta} itself -- so all of them are frozen to absolute via shell
+    # variables *before* the cd, same reasoning as source_fasta's realpath.
+    "REPO_ROOT=$(pwd) && FASTA_ABS=$(realpath {fasta})"
+    " && DECOY_ABS=$(realpath -m {decoy_fasta})"
+    " && cd {workdir}"
+    ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
+    " workspace --init --nocheck"
+    ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
+    ' database --custom "$FASTA_ABS" --prefix rev_'
+    ' && mv $(ls *decoys*.fas | head -n 1) "$DECOY_ABS"'
+    " && rm -rf .meta"
+    ' && test -f "$DECOY_ABS"'
+)
+def generate_fragpipe_decoy_fasta(fasta: Fasta):
+    return FragpipeDecoyFasta[decoy_fasta]
+
+
 @R.command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
 def write_fragpipe_manifest(mzml: TofFilteredMzml):
     return FragpipeManifest[manifest]
@@ -815,6 +859,9 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
         P.fragpipe_workflow = R.source_fragpipe_workflow(
             path=cfg.fragpipe.workflow_path
         )
+        # Standalone: not an input to run_fragpipe. Point database.db-path= at
+        # this file's output yourself -- see FragpipeDecoyFasta's docstring.
+        P.fragpipe_decoy_fasta = R.generate_fragpipe_decoy_fasta(P.fasta)
         P.fragpipe_manifest = R.write_fragpipe_manifest(P.tof_filtered_mzml)
         P.fragpipe_results_dir = R.run_fragpipe(
             P.fragpipe_manifest, P.fragpipe_workflow
