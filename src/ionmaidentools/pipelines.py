@@ -37,7 +37,7 @@ results into a SQLite regression DB and did an interactive baseline comparison. 
 is ported here -- `sage_summary` is the pipeline's terminal output.
 
 Optional m/z recalibration: when a job config has a `[recalibration]` section,
-`sage_pipeline` runs Sage twice. The first (calibration) pass searches a selected subset
+`ionmaiden_pipeline` runs Sage twice. The first (calibration) pass searches a selected subset
 of `tof_filtered_precursors` (`select_recalibration_precursors`, default top-K most
 intense, configurable via `[recalibration_precursor_selection]`) against the original
 `tof2mz`. Its confident, top-ranked, FDR-filtered PSMs are used by `recalibrate_mz`
@@ -50,7 +50,7 @@ final pass re-runs Sage with the corrected `tof2mz`, the *full* (unfiltered)
 today's single-pass behaviour untouched.
 
 Optional FragPipe comparison run: when a job config has a `[fragpipe]` section,
-`sage_pipeline` additionally runs FragPipe on the same `tof_filtered_pmsms`/
+`ionmaiden_pipeline` additionally runs FragPipe on the same `tof_filtered_pmsms`/
 `tof_filtered_precursors`/`tof2mz` Sage already searched, reproducing the old Snakemake
 `search_test` side-by-side comparison. `convert_tof_filtered_to_mzml` (`git/pmsms2mzml`)
 turns those into an mzML + idmap; `cfg.fragpipe.workflow_path` points at a FragPipe
@@ -567,7 +567,7 @@ def summarize_fragpipe(log: FragpipeLog):
     return FragpipeSummary[summary]
 
 
-def sage_pipeline(cfg: dict) -> Pipeline:
+def ionmaiden_pipeline(cfg: dict) -> Pipeline:
     """tof-filtered Sage search chain reproducing the old short_test Snakemake target."""
     cfg = DotDict.Recursive(cfg)
     P = Pipeline()
