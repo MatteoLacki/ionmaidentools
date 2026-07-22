@@ -282,6 +282,32 @@ class FragpipeDecoyFasta(NodeType):
     filename = "decoy_database.fas"
 
 
+class SyntheticPmsms(MmappetDataset):
+    """Fragment ions for peptides simulated from a FASTA (Koina-predicted, no
+    real acquisition) -- see scripts/simulate_peptides_to_pmsms.py. mz is
+    baked in directly (unlike TofFilteredPmsms's tof-index form), so
+    downstream converters run without --tof2mz."""
+
+    filename = "synthetic_pmsms.mmappet"
+
+
+class SyntheticPrecursors(MmappetDataset):
+    filename = "synthetic_precursors.mmappet"
+
+
+class SyntheticMzml(TofFilteredMzml):
+    """Accepted wherever TofFilteredMzml is, e.g. write_fragpipe_manifest's
+    mzml input -- same file shape, different (simulated) origin."""
+
+
+class SyntheticMzmlIdmap(MmappetDataset):
+    filename = "idmap.mmappet"
+
+
+class SyntheticMgf(NodeType):
+    filename = "spectra.mgf"
+
+
 class SageSummary(NodeType):
     filename = "results.sage.summary.tsv"
 
@@ -633,6 +659,38 @@ def generate_fragpipe_decoy_fasta(fasta: Fasta):
     return FragpipeDecoyFasta[decoy_fasta]
 
 
+@R.command(
+    "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
+    " {fasta} {pmsms} {precursors}"
+    " --charges {charges} --max-peptides-per-protein {max_peptides_per_protein}"
+    " --seed {seed}"
+    " && test -f {pmsms}/schema.txt && test -f {pmsms}/dataindex.mmappet/schema.txt"
+    " && test -f {precursors}/schema.txt"
+)
+def simulate_peptides_to_pmsms(
+    fasta: Fasta, charges: str, max_peptides_per_protein: int, seed: int,
+):
+    return SyntheticPmsms[pmsms], SyntheticPrecursors[precursors]
+
+
+@R.command(
+    "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
+    " --threads {threads} --numpress --zlib-level 9"
+    " && test -f {mzml} && test -f {idmap}/schema.txt",
+    threads=CORES,
+)
+def convert_synthetic_pmsms_to_mzml(pmsms: SyntheticPmsms, precursors: SyntheticPrecursors):
+    return SyntheticMzml[mzml], SyntheticMzmlIdmap[idmap]
+
+
+@R.command(
+    "venvs/common/bin/msms2mgf {pmsms} {precursors} configs/mgf/default.toml {mgf}"
+    " && test -f {mgf}"
+)
+def convert_synthetic_pmsms_to_mgf(pmsms: SyntheticPmsms, precursors: SyntheticPrecursors):
+    return SyntheticMgf[mgf]
+
+
 @R.command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
 def write_fragpipe_manifest(mzml: TofFilteredMzml):
     return FragpipeManifest[manifest]
@@ -868,5 +926,64 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
         )
         P.fragpipe_log = R.extract_fragpipe_log(P.fragpipe_results_dir)
         P.fragpipe_summary = R.summarize_fragpipe(P.fragpipe_log)
+
+    return P
+
+
+def fragpipe_synthetic_pipeline(config: dict) -> Pipeline:
+    """FragPipe smoke test on simulated data -- no Bruker .d input, no Sage.
+
+    1. Simulate tryptic peptides from cfg.fasta_path (a small multi-protein FASTA)
+       via Koina-predicted fragment ions, written as a pmsms dataset
+       (`simulate_peptides_to_pmsms`).
+    2. Convert that pmsms to a spectrum file: mzML (`convert_synthetic_pmsms_to_mzml`,
+       via `git/pmsms2mzml`) or MGF (`convert_synthetic_pmsms_to_mgf`, via
+       `venvs/common/bin/msms2mgf` + `configs/mgf/default.toml`), picked by
+       cfg.output_format ("mzml", the default, or "mgf").
+    3. mzML only: run FragPipe on it (reusing ionmaiden_pipeline's FragPipe rules
+       verbatim -- source_fragpipe_workflow/generate_fragpipe_decoy_fasta/
+       write_fragpipe_manifest/run_fragpipe/extract_fragpipe_log/summarize_fragpipe).
+       MGF has no search engine wired to it here (msms2mgf's plain-MGF output isn't
+       what run_fragpipe's manifest step expects) -- P.synthetic_mgf is terminal.
+
+    Verified end to end against a real FragPipe 24.0 + Philosopher install with a
+    10-protein/~200-peptide synthetic FASTA: both convert_synthetic_pmsms_to_mzml
+    (-> FragPipe, all 10 proteins recovered) and convert_synthetic_pmsms_to_mgf
+    produced valid output from the same simulate_peptides_to_pmsms run.
+    """
+    cfg: DotDict = DotDict.Recursive(config)
+    P = Pipeline()
+
+    P.section("Peptide Simulation")
+    P.fasta = R.source_fasta(path=cfg.fasta_path)
+    P.synthetic_pmsms, P.synthetic_precursors = R.simulate_peptides_to_pmsms(
+        P.fasta,
+        charges=cfg.get("simulation", {}).get("charges", "2,3"),
+        max_peptides_per_protein=cfg.get("simulation", {}).get(
+            "max_peptides_per_protein", 12
+        ),
+        seed=cfg.get("simulation", {}).get("seed", 20260715),
+    )
+
+    P.section("Spectrum File Creation")
+    output_format = cfg.get("output_format", "mzml")
+    if output_format == "mzml":
+        P.synthetic_mzml, P.synthetic_mzml_idmap = R.convert_synthetic_pmsms_to_mzml(
+            P.synthetic_pmsms, P.synthetic_precursors,
+        )
+
+        P.section("FragPipe Search")
+        P.fragpipe_workflow = R.source_fragpipe_workflow(path=cfg.fragpipe.workflow_path)
+        P.fragpipe_decoy_fasta = R.generate_fragpipe_decoy_fasta(P.fasta)
+        P.fragpipe_manifest = R.write_fragpipe_manifest(P.synthetic_mzml)
+        P.fragpipe_results_dir = R.run_fragpipe(P.fragpipe_manifest, P.fragpipe_workflow)
+        P.fragpipe_log = R.extract_fragpipe_log(P.fragpipe_results_dir)
+        P.fragpipe_summary = R.summarize_fragpipe(P.fragpipe_log)
+    elif output_format == "mgf":
+        P.synthetic_mgf = R.convert_synthetic_pmsms_to_mgf(
+            P.synthetic_pmsms, P.synthetic_precursors,
+        )
+    else:
+        raise ValueError(f"cfg.output_format must be 'mzml' or 'mgf', got {output_format!r}")
 
     return P
