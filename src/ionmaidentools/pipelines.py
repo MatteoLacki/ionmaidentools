@@ -40,14 +40,22 @@ Optional m/z recalibration: when a job config has a `[recalibration]` section,
 `ionmaiden_pipeline` runs Sage twice. The first (calibration) pass searches a selected subset
 of `tof_filtered_precursors` (`select_recalibration_precursors`, default top-K most
 intense, configurable via `[recalibration_precursor_selection]`) against the original
-`tof2mz`. Its confident, top-ranked, FDR-filtered PSMs are used by `recalibrate_mz`
-(`searchops.recalibration`) to fit a ppm-error-vs-m/z correction and apply it to
-`tof2mz` (a single dense ToF-bin-indexed lookup array shared by precursors and
-fragments), and to derive narrower `precursor_tol`/`fragment_tol` bounds
-(`update_sage_config`, via two chained `necroflow.tools.config_set` calls). The second,
-final pass re-runs Sage with the corrected `tof2mz`, the *full* (unfiltered)
-`tof_filtered_precursors`, and the narrowed config. Jobs without `[recalibration]` keep
-today's single-pass behaviour untouched.
+`tof2mz`. Its confident, top-ranked, FDR-filtered PSMs are used to fit a single
+ppm-error-vs-(precursor)-m/z correction (`searchops.recalibration.fit_correction`),
+applied in two separate places: `recalibrate_mz` applies it to `tof2mz` (the
+ToF-bin-indexed lookup array Sage uses only for *fragment* m/z -- precursor m/z
+reaches Sage as an already-materialized column and is never looked up through
+`tof2mz`, so correcting `tof2mz` alone does not touch precursors, despite what an
+earlier version of this docstring claimed), and `recalibrate_precursor_mz` applies
+it directly to `tof_filtered_precursors`'s own `mz` column, producing
+`recalibrated_precursors`. `recalibrate_mz` also derives shared `precursor_tol`/
+`fragment_tol` bounds from a user-specified percentile cut of the precursor residual
+error distribution (`update_sage_config`, via two chained `necroflow.tools.config_set`
+calls) -- fragment_tol reuses the precursor window rather than being computed from
+Sage's own `fragment_ppm`, which is an absolute-value quantity with no usable sign
+(see `sage_rescoring.md`). The second, final pass re-runs Sage with the corrected
+`tof2mz`, the corrected `recalibrated_precursors`, and the narrowed config. Jobs
+without `[recalibration]` keep today's single-pass behaviour untouched.
 
 Optional FragPipe comparison run: when a job config has a `[fragpipe]` section,
 `ionmaiden_pipeline` additionally runs FragPipe on the same `tof_filtered_pmsms`/
@@ -238,12 +246,56 @@ class SageMatchedFragments(NodeType):
     filename = "matched_fragments.sage.tsv"
 
 
-class TofFilteredMzml(NodeType):
+class MokapotUsedPin(NodeType):
+    filename = "used.pin"
+
+
+class MokapotPeptides(NodeType):
+    filename = "mokapot.peptides.txt"
+
+
+class MokapotPsms(NodeType):
+    filename = "mokapot.psms.txt"
+
+
+class ConfidentPsmsParquet(NodeType):
+    filename = "confident_psms.parquet"
+
+
+class SagePmsmsMapping(NodeType):
+    filename = "sage_mapped_to_pmsms"
+
+
+class ScoreComparisonPlots(NodeType):
+    filename = "score_comparison"
+
+
+class Mzml(NodeType):
     filename = "mzml.mzML"
 
 
-class TofFilteredMzmlIdmap(MmappetDataset):
+class MzmlIdmap(MmappetDataset):
     filename = "idmap.mmappet"
+
+
+class Mgf(NodeType):
+    filename = "spectra.mgf"
+
+
+class TofFilteredMzml(Mzml):
+    pass
+
+
+class TofFilteredMzmlIdmap(MzmlIdmap):
+    pass
+
+
+class TofFilteredMgf(Mgf):
+    filename = "tof_filtered.mgf"
+
+
+class TarGz(NodeType):
+    filename = "archive.tar.gz"
 
 
 class FragpipeWorkflow(NodeType):
@@ -300,12 +352,12 @@ class SyntheticMzml(TofFilteredMzml):
     mzml input -- same file shape, different (simulated) origin."""
 
 
-class SyntheticMzmlIdmap(MmappetDataset):
-    filename = "idmap.mmappet"
+class SyntheticMzmlIdmap(TofFilteredMzmlIdmap):
+    pass
 
 
-class SyntheticMgf(NodeType):
-    filename = "spectra.mgf"
+class SyntheticMgf(Mgf):
+    pass
 
 
 class SageSummary(NodeType):
@@ -329,6 +381,14 @@ class RecalibrationConfig(NodeType):
 
 class RecalibrationTolerance(NodeType):
     filename = "recalibration_tolerance.json"
+
+
+class RecalibratedPrecursors(TofFilteredPrecursors):
+    """tof_filtered_precursors with `mz` corrected by the same ppm-error fit
+    recalibrate_mz derives for tof2mz -- accepted wherever TofFilteredPrecursors
+    is, e.g. run_sage's final-pass `precursors` input."""
+
+    filename = "recalibrated_precursors.mmappet"
 
 
 # --- source rules (symlink pre-existing files/dirs, no validation) ---
@@ -576,6 +636,19 @@ def recalibrate_mz(
 
 
 @R.command(
+    "venvs/common/bin/recalibrate-precursor-mz {sage_results_tsv} {precursors}"
+    " {recalibrated_precursors} --config {config} --fdr {fdr}"
+)
+def recalibrate_precursor_mz(
+    sage_results_tsv: SageResultsTsv,
+    precursors: TofFilteredPrecursors,
+    config: RecalibrationConfig,
+    fdr: int | float,
+):
+    return RecalibratedPrecursors[recalibrated_precursors]
+
+
+@R.command(
     ".venv/bin/python -m necroflow.tools.config_set"
     " {sage_config} {workdir}/precursor_tol_updated.json"
     " --target precursor_tol --source {tolerance} --source-field precursor_tol"
@@ -614,10 +687,53 @@ def run_sage(
 
 
 @R.command(
+    "venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {sage_results_pin} -o {used_pin}"
+    " && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
+    " --train_fdr 0.05 --test_fdr 0.01"
+    " && test -f {peptides} && test -f {psms}"
+)
+def mokapot(sage_results_pin: SageResultsPin):
+    return MokapotUsedPin[used_pin], MokapotPeptides[peptides], MokapotPsms[psms]
+
+
+@R.command(
     "venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}"
 )
 def sage_summarize(sage_results_tsv: SageResultsTsv, fdr: int | float):
     return SageSummary[summary]
+
+
+@R.command("venvs/common/bin/sage-filter {sage_results_tsv} {confident_psms} --fdr {fdr}")
+def filter_sage_results(sage_results_tsv: SageResultsTsv, fdr: int | float):
+    return ConfidentPsmsParquet[confident_psms]
+
+
+@R.command(
+    "venvs/common/bin/sage-pmsms-mapper {confident_psms} {matched_fragments}"
+    " {precursors} {pmsms} {mapped} --tof2mz {tof2mz}"
+)
+def sage_map_to_pmsms(
+    confident_psms: ConfidentPsmsParquet,
+    matched_fragments: SageMatchedFragments,
+    precursors: TofFilteredPrecursors,
+    pmsms: TofFilteredPmsms,
+    tof2mz: Tof2Mz,
+):
+    return SagePmsmsMapping[mapped]
+
+
+@R.command(
+    "venvs/common/bin/sage_score_mapper {precursors} {pmsms}"
+    " {mapping}/precursors.parquet {mapping}/mapping.parquet"
+    " --config {config} -o {plots}"
+)
+def score_comparison(
+    precursors: TofFilteredPrecursors,
+    pmsms: TofFilteredPmsms,
+    mapping: SagePmsmsMapping,
+    config: PseudomsmsConfig,
+):
+    return ScoreComparisonPlots[plots]
 
 
 @R.command(
@@ -632,6 +748,57 @@ def convert_tof_filtered_to_mzml(
     tof2mz: Tof2Mz,
 ):
     return TofFilteredMzml[mzml], TofFilteredMzmlIdmap[idmap]
+
+
+@R.command(
+    "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
+    " --tof2mz {tof2mz} --threads {threads} --numpress --zlib-level 9"
+    " && test -f {mzml} && test -f {idmap}/schema.txt",
+    threads=CORES,
+)
+def convert_pmsms_to_mzml(
+    pmsms: Pmsms,
+    precursors: PreSageFilteredPrecursors,
+    tof2mz: Tof2Mz,
+):
+    return Mzml[mzml], MzmlIdmap[idmap]
+
+
+@R.command(
+    "venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} configs/mgf/default.toml {mgf}"
+    " --tof2mz_path {tof2mz} --threads_cnt {threads}"
+    " && test -f {mgf}",
+    threads=CORES,
+)
+def convert_pmsms_to_mgf(
+    pmsms: Pmsms,
+    precursors: PreSageFilteredPrecursors,
+    tof2mz: Tof2Mz,
+):
+    return Mgf[mgf]
+
+
+@R.command(
+    "venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} configs/mgf/default.toml {mgf}"
+    " --tof2mz_path {tof2mz} --threads_cnt {threads}"
+    " && test -f {mgf}",
+    threads=CORES,
+)
+def convert_tof_filtered_to_mgf(
+    pmsms: TofFilteredPmsms,
+    precursors: TofFilteredPrecursors,
+    tof2mz: Tof2Mz,
+):
+    return TofFilteredMgf[mgf]
+
+
+@R.command(
+    "tar -cf - -C $(dirname {path}) $(basename {path}) | pigz -p {threads} > {archive}"
+    " && test -f {archive}",
+    threads=CORES,
+)
+def compress_with_pigz(path: NodeType):
+    return TarGz[archive]
 
 
 @R.command("ln -s $(realpath {path}) {workflow}")
@@ -700,9 +867,11 @@ def write_fragpipe_manifest(mzml: TofFilteredMzml):
     "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
     " --workflow {workflow} --manifest {manifest} --workdir {dir}"
     " --config-tools-folder software/fragpipe/fragpipe-24.0/tools"
-    ' && test -n "$(ls {dir}/log_*.txt 2>/dev/null)"'
+    " --threads {threads} --ram {ram}"
+    ' && test -n "$(ls {dir}/log_*.txt 2>/dev/null)"',
+    threads=CORES,
 )
-def run_fragpipe(manifest: FragpipeManifest, workflow: FragpipeWorkflow):
+def run_fragpipe(manifest: FragpipeManifest, workflow: FragpipeWorkflow, ram: int = 0):
     return FragpipeResultsDir[dir]
 
 
@@ -836,6 +1005,19 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
         score_margin=cfg.tof_score_filter.score_margin,
     )
 
+    P.plain_mzml, P.plain_mzml_idmap = R.convert_pmsms_to_mzml(
+        P.pmsms, P.pre_sage_filtered_precursors, P.tof2mz,
+    )
+    P.plain_mgf = R.convert_pmsms_to_mgf(
+        P.pmsms, P.pre_sage_filtered_precursors, P.tof2mz,
+    )
+    P.tof_filtered_mzml, P.tof_filtered_mzml_idmap = R.convert_tof_filtered_to_mzml(
+        P.tof_filtered_pmsms, P.tof_filtered_precursors, P.tof2mz,
+    )
+    P.tof_filtered_mgf = R.convert_tof_filtered_to_mgf(
+        P.tof_filtered_pmsms, P.tof_filtered_precursors, P.tof2mz,
+    )
+
     P.section("Search")
 
     if "sage" in cfg:
@@ -874,6 +1056,12 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
+            P.recalibrated_precursors = R.recalibrate_precursor_mz(
+                P.filtered_sage_results_tsv,
+                P.tof_filtered_precursors,
+                P.recalibration_config,
+                fdr=cfg.sage_summarize.fdr,
+            )
             P.recalibrated_sage_config = R.update_sage_config(
                 P.sage_config, P.recalibration_tolerance
             )
@@ -885,9 +1073,25 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
             ) = R.run_sage(
                 P.tof_filtered_pmsms,
                 P.recalibrated_tof2mz,
-                P.tof_filtered_precursors,
+                P.recalibrated_precursors,
                 P.fasta,
                 P.recalibrated_sage_config,
+            )
+            P.confident_psms = R.filter_sage_results(
+                P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+            )
+            P.sage_pmsms_mapping = R.sage_map_to_pmsms(
+                P.confident_psms,
+                P.sage_matched_fragments,
+                P.tof_filtered_precursors,
+                P.tof_filtered_pmsms,
+                P.recalibrated_tof2mz,
+            )
+            P.score_comparison = R.score_comparison(
+                P.tof_filtered_precursors,
+                P.tof_filtered_pmsms,
+                P.sage_pmsms_mapping,
+                P.pseudomsms_config,
             )
         else:
             (
@@ -902,6 +1106,26 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
                 P.fasta,
                 P.sage_config,
             )
+            P.confident_psms = R.filter_sage_results(
+                P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+            )
+            P.sage_pmsms_mapping = R.sage_map_to_pmsms(
+                P.confident_psms,
+                P.sage_matched_fragments,
+                P.tof_filtered_precursors,
+                P.tof_filtered_pmsms,
+                P.tof2mz,
+            )
+            P.score_comparison = R.score_comparison(
+                P.tof_filtered_precursors,
+                P.tof_filtered_pmsms,
+                P.sage_pmsms_mapping,
+                P.pseudomsms_config,
+            )
+
+        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = R.mokapot(
+            P.sage_results_pin
+        )
 
         P.section("FDR Summary")
         P.sage_summary = R.sage_summarize(
@@ -909,11 +1133,6 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
         )
 
     if "fragpipe" in cfg:
-        P.tof_filtered_mzml, P.tof_filtered_mzml_idmap = R.convert_tof_filtered_to_mzml(
-            P.tof_filtered_pmsms,
-            P.tof_filtered_precursors,
-            P.tof2mz,
-        )
         P.fragpipe_workflow = R.source_fragpipe_workflow(
             path=cfg.fragpipe.workflow_path
         )
@@ -922,7 +1141,7 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
         P.fragpipe_decoy_fasta = R.generate_fragpipe_decoy_fasta(P.fasta)
         P.fragpipe_manifest = R.write_fragpipe_manifest(P.tof_filtered_mzml)
         P.fragpipe_results_dir = R.run_fragpipe(
-            P.fragpipe_manifest, P.fragpipe_workflow
+            P.fragpipe_manifest, P.fragpipe_workflow, ram=cfg.fragpipe.get("ram", 0)
         )
         P.fragpipe_log = R.extract_fragpipe_log(P.fragpipe_results_dir)
         P.fragpipe_summary = R.summarize_fragpipe(P.fragpipe_log)
