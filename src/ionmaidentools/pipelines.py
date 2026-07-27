@@ -168,8 +168,16 @@ class RawPrecursorClusters(MmappetDataset):
     filename = "raw_precursor_clusters.mmappet"
 
 
+class PrecursorAnnotationConfig(NodeType):
+    filename = "precursor_annotation_config.toml"
+
+
 class PostprocessingConfig(NodeType):
     filename = "postprocessing_config.toml"
+
+
+class AnnotatedPrecursorClusters(MmappetDataset):
+    filename = "annotated_precursor_clusters.mmappet"
 
 
 class PostprocessedPrecursorClusters(MmappetDataset):
@@ -508,19 +516,38 @@ def score_candidates(
 
 
 @text_file
+def write_precursor_annotation_config(text: str):
+    config = output(PrecursorAnnotationConfig)
+    return config
+
+
+@text_file
 def write_postprocessing_config(text: str):
     config = output(PostprocessingConfig)
     return config
 
 
 @command(
-    "venvs/common/bin/ms1_postprocess_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {clusters}"
+    "venvs/common/bin/ms1_annotate_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {annotated}"
 )
-def postprocess_precursor_candidates(
+def annotate_precursor_clusters(
     tdf: BrukerD,
     ms1: Ms1Events,
     candidates: RawPrecursorClusters,
     scale_estimates: ScaleEstimates,
+    config: PrecursorAnnotationConfig,
+):
+    annotated = output(AnnotatedPrecursorClusters)
+    return annotated
+
+
+@command(
+    "venvs/common/bin/ms1_decharge_candidates {tdf} {ms1} {annotated} {config} {clusters}"
+)
+def decharge_precursor_clusters(
+    tdf: BrukerD,
+    ms1: Ms1Events,
+    annotated: AnnotatedPrecursorClusters,
     config: PostprocessingConfig,
 ):
     clusters = output(PostprocessedPrecursorClusters)
@@ -1045,15 +1072,25 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     )
 
     P.section("Precursor Postprocessing")
+    P.precursor_annotation_config = write_precursor_annotation_config(
+        P, text=tomlkit.dumps(cfg.precursor_annotation)
+    )
     P.postprocessing_config = write_postprocessing_config(
         P, text=tomlkit.dumps(cfg.postprocessing_of_precursors)
     )
-    P.postprocessed_precursor_clusters = postprocess_precursor_candidates(
+    P.annotated_precursor_clusters = annotate_precursor_clusters(
         P,
         P.tdf,
         P.ms1_events,
         P.raw_precursor_clusters,
         P.scale_estimates,
+        P.precursor_annotation_config,
+    )
+    P.postprocessed_precursor_clusters = decharge_precursor_clusters(
+        P,
+        P.tdf,
+        P.ms1_events,
+        P.annotated_precursor_clusters,
         P.postprocessing_config,
     )
 
