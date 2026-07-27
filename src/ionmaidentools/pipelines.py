@@ -83,6 +83,13 @@ standalone output (`P.fragpipe_decoy_fasta`), deliberately *not* wired into
 `run_fragpipe` -- keeping it a dependency would mean patching the `.workflow` file's
 `database.db-path=` at run time, reopening the "plain data file, never patched" design
 above. For now, point that line at `generate_fragpipe_decoy_fasta`'s output by hand.
+
+Migrated from necroflow's main-branch `Rules()`/`@R.command`/`Type[name]`/
+`factory(config) -> Pipeline` API to the current explicit `@command`/`output()`/
+`factory(P, config) -> None` API (see necroflow's `skills/update.md`). Node names,
+commands, config semantics, and requested labels are unchanged; only the API shape
+changed. Fingerprint v2 changes node addresses, so cached node directories from
+before this migration are not reused -- every job recomputes from scratch once.
 """
 
 from __future__ import annotations
@@ -92,17 +99,8 @@ import os
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import NodeType, Pipeline, Rules
-from pathlib import Path
+from necroflow import NodeType, Pipeline, command, output, text_file
 
-R = Rules()
-
-# Matches the old Snakemake rules' `threads: workflow.cores` -- these 4 tools
-# (mkpmsms, precursor_neighbors_csr, tof_filter, score_based_pmsms_filter) are each
-# meant to claim the whole machine while they run. `{threads}` in their command
-# strings resolves from this constraint automatically (necroflow's built-in
-# constraint-placeholder mechanism), so it no longer needs to travel through job
-# config.
 CORES = os.cpu_count() or 1
 
 
@@ -154,8 +152,16 @@ class ScaleEstimates(NodeType):
     filename = "scale_estimates"
 
 
+class PrecursorNeighborCountConfig(NodeType):
+    filename = "precursor_neighbor_count_config.toml"
+
+
 class PrecursorCandidateSelectionConfig(NodeType):
     filename = "precursor_candidate_selection_config.toml"
+
+
+class RawCandidateFeatures(MmappetDataset):
+    filename = "raw_candidate_features.mmappet"
 
 
 class RawPrecursorClusters(MmappetDataset):
@@ -392,55 +398,66 @@ class RecalibratedPrecursors(TofFilteredPrecursors):
 
 
 # --- source rules (symlink pre-existing files/dirs, no validation) ---
-@R.command("ln -s $(realpath {path}) {tdf}")
+@command("ln -s $(realpath {path}) {tdf}")
 def source_bruker_d(path: str):
-    return BrukerD[tdf]
+    tdf = output(BrukerD)
+    return tdf
 
 
-@R.command("ln -s $(realpath {path}) {fasta}")
+@command("ln -s $(realpath {path}) {fasta}")
 def source_fasta(path: str):
-    return Fasta[fasta]
+    fasta = output(Fasta)
+    return fasta
 
 
 # --- compute rules ---
-@R.command(
+@command(
     "venvs/common/bin/d2ms1 {tdf} {ms1}"
     " && test -f {ms1}/tof_row_starts.dat"
     " && test -f {ms1}/tof_urt_diff_index.dat"
     " && test -f {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt"
 )
 def tdf2ms1(tdf: BrukerD):
-    return Ms1Events[ms1]
+    ms1 = output(Ms1Events)
+    return ms1
 
 
-@R.command("git/ionmaidenmetal/build/tdf2ms ms2 {tdf} {ms2} --overwrite")
+@command("git/ionmaidenmetal/build/tdf2ms ms2 {tdf} {ms2} --overwrite")
 def tdf2ms2(tdf: BrukerD):
-    return Ms2Events[ms2]
+    ms2 = output(Ms2Events)
+    return ms2
 
 
-@R.command("venvs/common/bin/python scripts/tdf2tof2mz.py {tdf} {ms2} {tof2mz}")
+@command("venvs/common/bin/python scripts/tdf2tof2mz.py {tdf} {ms2} {tof2mz}")
 def tdf2tof2mz(tdf: BrukerD, ms2: Ms2Events):
-    return Tof2Mz[tof2mz]
+    tof2mz = output(Tof2Mz)
+    return tof2mz
 
 
-R.text_file("write_scale_estimation_config", ScaleEstimationConfig)
+@text_file
+def write_scale_estimation_config(text: str):
+    config = output(ScaleEstimationConfig)
+    return config
 
 
-@R.command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}")
+@command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}")
 def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
-    return ArgmaxSample[argmaxes], ArgmaxSieveStats[stats]
+    argmaxes = output(ArgmaxSample)
+    stats = output(ArgmaxSieveStats)
+    return argmaxes, stats
 
 
-@R.command(
+@command(
     "venvs/common/bin/ms1_extract_sample_tensors {ms1} {argmaxes} {config} {tensors}"
 )
 def extract_ms1_sample_tensors(
     ms1: Ms1Events, argmaxes: ArgmaxSample, config: ScaleEstimationConfig
 ):
-    return SampleTensors[tensors]
+    tensors = output(SampleTensors)
+    return tensors
 
 
-@R.command(
+@command(
     "venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {stats} {tensors} {config} {scales}"
 )
 def fit_ms1_scale_estimates(
@@ -449,29 +466,54 @@ def fit_ms1_scale_estimates(
     tensors: SampleTensors,
     config: ScaleEstimationConfig,
 ):
-    return ScaleEstimates[scales]
+    scales = output(ScaleEstimates)
+    return scales
 
 
-R.text_file(
-    "write_precursor_candidate_selection_config", PrecursorCandidateSelectionConfig
+@text_file
+def write_precursor_neighbor_count_config(text: str):
+    config = output(PrecursorNeighborCountConfig)
+    return config
+
+
+@text_file
+def write_precursor_candidate_selection_config(text: str):
+    config = output(PrecursorCandidateSelectionConfig)
+    return config
+
+
+@command(
+    "venvs/common/bin/ms1_count_candidate_neighbors {ms1} {scale_estimates} {config} {features}"
 )
-
-
-@R.command(
-    "venvs/common/bin/ms1_select_candidates {ms1} {scale_estimates} {config} {clusters}"
-)
-def select_precursor_candidates(
+def count_candidate_neighbors(
     ms1: Ms1Events,
     scale_estimates: ScaleEstimates,
+    config: PrecursorNeighborCountConfig,
+):
+    features = output(RawCandidateFeatures)
+    return features
+
+
+@command(
+    "venvs/common/bin/ms1_score_candidates {ms1} {scale_estimates} {features} {config} {clusters}"
+)
+def score_candidates(
+    ms1: Ms1Events,
+    scale_estimates: ScaleEstimates,
+    features: RawCandidateFeatures,
     config: PrecursorCandidateSelectionConfig,
 ):
-    return RawPrecursorClusters[clusters]
+    clusters = output(RawPrecursorClusters)
+    return clusters
 
 
-R.text_file("write_postprocessing_config", PostprocessingConfig)
+@text_file
+def write_postprocessing_config(text: str):
+    config = output(PostprocessingConfig)
+    return config
 
 
-@R.command(
+@command(
     "venvs/common/bin/ms1_postprocess_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {clusters}"
 )
 def postprocess_precursor_candidates(
@@ -481,13 +523,17 @@ def postprocess_precursor_candidates(
     scale_estimates: ScaleEstimates,
     config: PostprocessingConfig,
 ):
-    return PostprocessedPrecursorClusters[clusters]
+    clusters = output(PostprocessedPrecursorClusters)
+    return clusters
 
 
-R.text_file("write_precursor_transmission_config", PrecursorTransmissionConfig)
+@text_file
+def write_precursor_transmission_config(text: str):
+    config = output(PrecursorTransmissionConfig)
+    return config
 
 
-@R.command(
+@command(
     "venvs/common/bin/transmit_precursors {tdf} {clusters} {config} {transpec}"
     " --output-precursors {precursors} --verbose"
     " && test -f {transpec}/schema.txt"
@@ -497,20 +543,26 @@ def transmit_precursors_into_fragment_space(
     clusters: PostprocessedPrecursorClusters,
     config: PrecursorTransmissionConfig,
 ):
-    return TransmittedMs1Events[transpec], TransmittedPrecursorClusters[precursors]
+    transpec = output(TransmittedMs1Events)
+    precursors = output(TransmittedPrecursorClusters)
+    return transpec, precursors
 
 
-@R.command(
+@command(
     "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
 )
 def filter_first_precursors(precursors: TransmittedPrecursorClusters, filter: str):
-    return FirstFilterPrecursors[filtered]
+    filtered = output(FirstFilterPrecursors)
+    return filtered
 
 
-R.text_file("write_pseudomsms_config", PseudomsmsConfig)
+@text_file
+def write_pseudomsms_config(text: str):
+    config = output(PseudomsmsConfig)
+    return config
 
 
-@R.command(
+@command(
     "git/ionmaidenmetal/build/mkpmsms --fragments {ms2} --transmitted-precursors {transprec}"
     " --precursors {filter_mm} --output {pmsms} --config {config}"
     " --threads {threads} --batch 1024"
@@ -530,27 +582,33 @@ def run_mkpmsms_binary(
     filter_mm: FirstFilterPrecursors,
     config: PseudomsmsConfig,
 ):
-    return Pmsms[pmsms]
+    pmsms = output(Pmsms)
+    return pmsms
 
 
-@R.command(
+@command(
     "venvs/common/bin/cut_and_index_precursors {filter_mm} {pmsms}/dataindex.mmappet {precursors}"
 )
 def cut_and_index_precursors(filter_mm: FirstFilterPrecursors, pmsms: Pmsms):
-    return Ms2IndexedPrecursors[precursors]
+    precursors = output(Ms2IndexedPrecursors)
+    return precursors
 
 
-@R.command(
+@command(
     "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
 )
 def filter_pre_sage_precursors(precursors: Ms2IndexedPrecursors, filter: str):
-    return PreSageFilteredPrecursors[filtered]
+    filtered = output(PreSageFilteredPrecursors)
+    return filtered
 
 
-R.text_file("write_precursor_neighbors_config", PrecursorNeighborsConfig)
+@text_file
+def write_precursor_neighbors_config(text: str):
+    config = output(PrecursorNeighborsConfig)
+    return config
 
 
-@R.command(
+@command(
     "venvs/common/bin/build-precursor-grid-index {precursors} {tdf} {grid} --config {config}"
 )
 def build_precursor_grid_index(
@@ -558,10 +616,11 @@ def build_precursor_grid_index(
     tdf: BrukerD,
     config: PrecursorNeighborsConfig,
 ):
-    return PrecursorGridIndex[grid]
+    grid = output(PrecursorGridIndex)
+    return grid
 
 
-@R.command(
+@command(
     "git/ionmaidenmetal/build/precursor_neighbors_csr"
     " --boxes-input {grid_index}/boxes.mmappet --index-input {grid_index} --output {csr}"
     " $(venvs/common/bin/precursor-neighbors-params {config} {tdf})"
@@ -573,21 +632,23 @@ def compute_precursor_neighbors(
     tdf: BrukerD,
     config: PrecursorNeighborsConfig,
 ):
-    return PrecursorNeighborsCsr[csr]
+    csr = output(PrecursorNeighborsCsr)
+    return csr
 
 
-@R.command(
+@command(
     "git/ionmaidenmetal/build/tof_filter --pmsms-path {pmsms} --neighbors-csr-path {neighbors_csr}"
     " --out-path {score} --n-threads {threads}",
     threads=CORES,
 )
 def tof_score_filter(pmsms: Pmsms, neighbors_csr: PrecursorNeighborsCsr):
-    return NeighborScore[
-        score
-    ]  # no config arg -- confirmed vestigial in the Snakemake rule
+    score = output(
+        NeighborScore
+    )  # no config arg -- confirmed vestigial in the Snakemake rule
+    return score
 
 
-@R.command(
+@command(
     "venvs/common/bin/python -m timstofu.cli.score_based_pmsms_filter"
     " {pmsms} {precursors} {neighbor_score} {pmsms_out} {precursors_out}"
     " --threads {threads} --score-margin {score_margin}",
@@ -599,16 +660,18 @@ def materialize_tof_filtered_pmsms(
     neighbor_score: NeighborScore,
     score_margin: int | float,
 ):
-    return TofFilteredPmsms[pmsms_out], TofFilteredPrecursors[precursors_out]
+    pmsms_out = output(TofFilteredPmsms)
+    precursors_out = output(TofFilteredPrecursors)
+    return pmsms_out, precursors_out
 
 
-R.text_file(
-    "write_recalibration_precursor_selection_config",
-    RecalibrationPrecursorSelectionConfig,
-)
+@text_file
+def write_recalibration_precursor_selection_config(text: str):
+    config = output(RecalibrationPrecursorSelectionConfig)
+    return config
 
 
-@R.command(
+@command(
     "venvs/common/bin/python -m timstofu.cli.select_recalibration_precursors"
     " {precursors} {config} {selected}"
 )
@@ -616,13 +679,17 @@ def select_recalibration_precursors(
     precursors: TofFilteredPrecursors,
     config: RecalibrationPrecursorSelectionConfig,
 ):
-    return RecalibrationPrecursors[selected]
+    selected = output(RecalibrationPrecursors)
+    return selected
 
 
-R.text_file("write_recalibration_config", RecalibrationConfig)
+@text_file
+def write_recalibration_config(text: str):
+    config = output(RecalibrationConfig)
+    return config
 
 
-@R.command(
+@command(
     "venvs/common/bin/recalibrate-mz {sage_results_tsv} {tof2mz}"
     " {recalibrated_tof2mz} {tolerance} --config {config} --fdr {fdr}"
 )
@@ -632,10 +699,12 @@ def recalibrate_mz(
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    return Tof2Mz[recalibrated_tof2mz], RecalibrationTolerance[tolerance]
+    recalibrated_tof2mz = output(Tof2Mz)
+    tolerance = output(RecalibrationTolerance)
+    return recalibrated_tof2mz, tolerance
 
 
-@R.command(
+@command(
     "venvs/common/bin/recalibrate-precursor-mz {sage_results_tsv} {precursors}"
     " {recalibrated_precursors} --config {config} --fdr {fdr}"
 )
@@ -645,10 +714,11 @@ def recalibrate_precursor_mz(
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    return RecalibratedPrecursors[recalibrated_precursors]
+    recalibrated_precursors = output(RecalibratedPrecursors)
+    return recalibrated_precursors
 
 
-@R.command(
+@command(
     ".venv/bin/python -m necroflow.tools.config_set"
     " {sage_config} {workdir}/precursor_tol_updated.json"
     " --target precursor_tol --source {tolerance} --source-field precursor_tol"
@@ -657,13 +727,17 @@ def recalibrate_precursor_mz(
     " --target fragment_tol --source {tolerance} --source-field fragment_tol"
 )
 def update_sage_config(sage_config: SageConfig, tolerance: RecalibrationTolerance):
-    return SageConfig[recalibrated_sage_config]
+    recalibrated_sage_config = output(SageConfig)
+    return recalibrated_sage_config
 
 
-R.text_file("write_sage_config", SageConfig)
+@text_file
+def write_sage_config(text: str):
+    config = output(SageConfig)
+    return config
 
 
-@R.command(
+@command(
     "software/sage/devel_fixed/sage --version"
     " && software/sage/devel_fixed/sage -f {fasta} --annotate-matches --write-pin"
     " --output_directory {workdir} --pmsms {pmsms} --tof2mz {tof2mz} --precursors {precursors}"
@@ -678,37 +752,39 @@ def run_sage(
     fasta: Fasta,
     sage_config: SageConfig,
 ):
-    return (
-        SageResultsJson[results_json],
-        SageResultsPin[results_pin],
-        SageResultsTsv[results_tsv],
-        SageMatchedFragments[matched_fragments],
-    )
+    results_json = output(SageResultsJson)
+    results_pin = output(SageResultsPin)
+    results_tsv = output(SageResultsTsv)
+    matched_fragments = output(SageMatchedFragments)
+    return results_json, results_pin, results_tsv, matched_fragments
 
 
-@R.command(
+@command(
     "venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {sage_results_pin} -o {used_pin}"
     " && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
     " --train_fdr 0.05 --test_fdr 0.01"
     " && test -f {peptides} && test -f {psms}"
 )
 def mokapot(sage_results_pin: SageResultsPin):
-    return MokapotUsedPin[used_pin], MokapotPeptides[peptides], MokapotPsms[psms]
+    used_pin = output(MokapotUsedPin)
+    peptides = output(MokapotPeptides)
+    psms = output(MokapotPsms)
+    return used_pin, peptides, psms
 
 
-@R.command(
-    "venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}"
-)
+@command("venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}")
 def sage_summarize(sage_results_tsv: SageResultsTsv, fdr: int | float):
-    return SageSummary[summary]
+    summary = output(SageSummary)
+    return summary
 
 
-@R.command("venvs/common/bin/sage-filter {sage_results_tsv} {confident_psms} --fdr {fdr}")
+@command("venvs/common/bin/sage-filter {sage_results_tsv} {confident_psms} --fdr {fdr}")
 def filter_sage_results(sage_results_tsv: SageResultsTsv, fdr: int | float):
-    return ConfidentPsmsParquet[confident_psms]
+    confident_psms = output(ConfidentPsmsParquet)
+    return confident_psms
 
 
-@R.command(
+@command(
     "venvs/common/bin/sage-pmsms-mapper {confident_psms} {matched_fragments}"
     " {precursors} {pmsms} {mapped} --tof2mz {tof2mz}"
 )
@@ -719,10 +795,11 @@ def sage_map_to_pmsms(
     pmsms: TofFilteredPmsms,
     tof2mz: Tof2Mz,
 ):
-    return SagePmsmsMapping[mapped]
+    mapped = output(SagePmsmsMapping)
+    return mapped
 
 
-@R.command(
+@command(
     "venvs/common/bin/sage_score_mapper {precursors} {pmsms}"
     " {mapping}/precursors.parquet {mapping}/mapping.parquet"
     " --config {config} -o {plots}"
@@ -733,10 +810,11 @@ def score_comparison(
     mapping: SagePmsmsMapping,
     config: PseudomsmsConfig,
 ):
-    return ScoreComparisonPlots[plots]
+    plots = output(ScoreComparisonPlots)
+    return plots
 
 
-@R.command(
+@command(
     "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
     " --tof2mz {tof2mz} --threads {threads} --numpress --zlib-level 9"
     " && test -f {mzml} && test -f {idmap}/schema.txt",
@@ -747,10 +825,12 @@ def convert_tof_filtered_to_mzml(
     precursors: TofFilteredPrecursors,
     tof2mz: Tof2Mz,
 ):
-    return TofFilteredMzml[mzml], TofFilteredMzmlIdmap[idmap]
+    mzml = output(TofFilteredMzml)
+    idmap = output(TofFilteredMzmlIdmap)
+    return mzml, idmap
 
 
-@R.command(
+@command(
     "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
     " --tof2mz {tof2mz} --threads {threads} --numpress --zlib-level 9"
     " && test -f {mzml} && test -f {idmap}/schema.txt",
@@ -761,10 +841,12 @@ def convert_pmsms_to_mzml(
     precursors: PreSageFilteredPrecursors,
     tof2mz: Tof2Mz,
 ):
-    return Mzml[mzml], MzmlIdmap[idmap]
+    mzml = output(Mzml)
+    idmap = output(MzmlIdmap)
+    return mzml, idmap
 
 
-@R.command(
+@command(
     "venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} configs/mgf/default.toml {mgf}"
     " --tof2mz_path {tof2mz} --threads_cnt {threads}"
     " && test -f {mgf}",
@@ -775,10 +857,11 @@ def convert_pmsms_to_mgf(
     precursors: PreSageFilteredPrecursors,
     tof2mz: Tof2Mz,
 ):
-    return Mgf[mgf]
+    mgf = output(Mgf)
+    return mgf
 
 
-@R.command(
+@command(
     "venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} configs/mgf/default.toml {mgf}"
     " --tof2mz_path {tof2mz} --threads_cnt {threads}"
     " && test -f {mgf}",
@@ -789,24 +872,27 @@ def convert_tof_filtered_to_mgf(
     precursors: TofFilteredPrecursors,
     tof2mz: Tof2Mz,
 ):
-    return TofFilteredMgf[mgf]
+    mgf = output(TofFilteredMgf)
+    return mgf
 
 
-@R.command(
+@command(
     "tar -cf - -C $(dirname {path}) $(basename {path}) | pigz -p {threads} > {archive}"
     " && test -f {archive}",
     threads=CORES,
 )
 def compress_with_pigz(path: NodeType):
-    return TarGz[archive]
+    archive = output(TarGz)
+    return archive
 
 
-@R.command("ln -s $(realpath {path}) {workflow}")
+@command("ln -s $(realpath {path}) {workflow}")
 def source_fragpipe_workflow(path: str):
-    return FragpipeWorkflow[workflow]
+    workflow = output(FragpipeWorkflow)
+    return workflow
 
 
-@R.command(
+@command(
     # `cd` changes the meaning of every relative path substituted into this
     # template, including the philosopher binary's own repo-relative path and
     # {decoy_fasta} itself -- so all of them are frozen to absolute via shell
@@ -823,10 +909,11 @@ def source_fragpipe_workflow(path: str):
     ' && test -f "$DECOY_ABS"'
 )
 def generate_fragpipe_decoy_fasta(fasta: Fasta):
-    return FragpipeDecoyFasta[decoy_fasta]
+    decoy_fasta = output(FragpipeDecoyFasta)
+    return decoy_fasta
 
 
-@R.command(
+@command(
     "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
     " {fasta} {pmsms} {precursors}"
     " --charges {charges} --max-peptides-per-protein {max_peptides_per_protein}"
@@ -835,35 +922,48 @@ def generate_fragpipe_decoy_fasta(fasta: Fasta):
     " && test -f {precursors}/schema.txt"
 )
 def simulate_peptides_to_pmsms(
-    fasta: Fasta, charges: str, max_peptides_per_protein: int, seed: int,
+    fasta: Fasta,
+    charges: str,
+    max_peptides_per_protein: int,
+    seed: int,
 ):
-    return SyntheticPmsms[pmsms], SyntheticPrecursors[precursors]
+    pmsms = output(SyntheticPmsms)
+    precursors = output(SyntheticPrecursors)
+    return pmsms, precursors
 
 
-@R.command(
+@command(
     "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
     " --threads {threads} --numpress --zlib-level 9"
     " && test -f {mzml} && test -f {idmap}/schema.txt",
     threads=CORES,
 )
-def convert_synthetic_pmsms_to_mzml(pmsms: SyntheticPmsms, precursors: SyntheticPrecursors):
-    return SyntheticMzml[mzml], SyntheticMzmlIdmap[idmap]
+def convert_synthetic_pmsms_to_mzml(
+    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors
+):
+    mzml = output(SyntheticMzml)
+    idmap = output(SyntheticMzmlIdmap)
+    return mzml, idmap
 
 
-@R.command(
+@command(
     "venvs/common/bin/msms2mgf {pmsms} {precursors} configs/mgf/default.toml {mgf}"
     " && test -f {mgf}"
 )
-def convert_synthetic_pmsms_to_mgf(pmsms: SyntheticPmsms, precursors: SyntheticPrecursors):
-    return SyntheticMgf[mgf]
+def convert_synthetic_pmsms_to_mgf(
+    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors
+):
+    mgf = output(SyntheticMgf)
+    return mgf
 
 
-@R.command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
+@command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
 def write_fragpipe_manifest(mzml: TofFilteredMzml):
-    return FragpipeManifest[manifest]
+    manifest = output(FragpipeManifest)
+    return manifest
 
 
-@R.command(
+@command(
     "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
     " --workflow {workflow} --manifest {manifest} --workdir {dir}"
     " --config-tools-folder software/fragpipe/fragpipe-24.0/tools"
@@ -872,48 +972,51 @@ def write_fragpipe_manifest(mzml: TofFilteredMzml):
     threads=CORES,
 )
 def run_fragpipe(manifest: FragpipeManifest, workflow: FragpipeWorkflow, ram: int = 0):
-    return FragpipeResultsDir[dir]
+    dir = output(FragpipeResultsDir)
+    return dir
 
 
-@R.command("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
+@command("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
 def extract_fragpipe_log(dir: FragpipeResultsDir):
-    return FragpipeLog[log]
+    log = output(FragpipeLog)
+    return log
 
 
-@R.command(
+@command(
     "grep -m 1 temp {log} > {summary}"
     " && grep -n 'MASS CALIBRATION' {log} -A 8 >> {summary}"
     " && grep 'Final report numbers after FDR filtering, and post-processing' {log} >> {summary}"
 )
 def summarize_fragpipe(log: FragpipeLog):
-    return FragpipeSummary[summary]
+    summary = output(FragpipeSummary)
+    return summary
 
 
-def ionmaiden_pipeline(config: dict) -> Pipeline:
+def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     """tof-filtered Sage search chain reproducing the old short_test Snakemake target."""
     cfg = DotDict.Recursive(config)
-    P = Pipeline()
 
     P.section("Acquisition")
-    P.tdf = R.source_bruker_d(path=cfg.tdf_path)
-    P.fasta = R.source_fasta(path=cfg.fasta_path)
+    P.tdf = source_bruker_d(P, path=cfg.tdf_path)
+    P.fasta = source_fasta(P, path=cfg.fasta_path)
 
     P.section("Raw Extraction")
-    P.ms1_events = R.tdf2ms1(P.tdf)
-    P.ms2_events = R.tdf2ms2(P.tdf)
-    P.tof2mz = R.tdf2tof2mz(P.tdf, P.ms2_events)
+    P.ms1_events = tdf2ms1(P, P.tdf)
+    P.ms2_events = tdf2ms2(P, P.tdf)
+    P.tof2mz = tdf2tof2mz(P, P.tdf, P.ms2_events)
 
     P.section("MS1 Scale Calibration")
-    P.scale_estimation_config = R.write_scale_estimation_config(
-        text=tomlkit.dumps(cfg.scale_estimation)
+    P.scale_estimation_config = write_scale_estimation_config(
+        P, text=tomlkit.dumps(cfg.scale_estimation)
     )
-    P.argmaxes, P.argmax_sieve_stats = R.find_ms1_argmaxes(
-        P.ms1_events, P.scale_estimation_config
+    P.argmaxes, P.argmax_sieve_stats = find_ms1_argmaxes(
+        P, P.ms1_events, P.scale_estimation_config
     )
-    P.sample_tensors = R.extract_ms1_sample_tensors(
-        P.ms1_events, P.argmaxes, P.scale_estimation_config
+    P.sample_tensors = extract_ms1_sample_tensors(
+        P, P.ms1_events, P.argmaxes, P.scale_estimation_config
     )
-    P.scale_estimates = R.fit_ms1_scale_estimates(
+    P.scale_estimates = fit_ms1_scale_estimates(
+        P,
         P.argmaxes,
         P.argmax_sieve_stats,
         P.sample_tensors,
@@ -921,22 +1024,32 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
     )
 
     P.section("Precursor Selection")
-    P.precursor_candidate_selection_config = (
-        R.write_precursor_candidate_selection_config(
-            text=tomlkit.dumps(cfg.precursor_candidate_selection)
-        )
+    P.precursor_neighbor_count_config = write_precursor_neighbor_count_config(
+        P, text=tomlkit.dumps(cfg.precursor_neighbor_count)
     )
-    P.raw_precursor_clusters = R.select_precursor_candidates(
+    P.precursor_candidate_selection_config = write_precursor_candidate_selection_config(
+        P, text=tomlkit.dumps(cfg.precursor_candidate_selection)
+    )
+    P.raw_candidate_features = count_candidate_neighbors(
+        P,
         P.ms1_events,
         P.scale_estimates,
+        P.precursor_neighbor_count_config,
+    )
+    P.raw_precursor_clusters = score_candidates(
+        P,
+        P.ms1_events,
+        P.scale_estimates,
+        P.raw_candidate_features,
         P.precursor_candidate_selection_config,
     )
 
     P.section("Precursor Postprocessing")
-    P.postprocessing_config = R.write_postprocessing_config(
-        text=tomlkit.dumps(cfg.postprocessing_of_precursors)
+    P.postprocessing_config = write_postprocessing_config(
+        P, text=tomlkit.dumps(cfg.postprocessing_of_precursors)
     )
-    P.postprocessed_precursor_clusters = R.postprocess_precursor_candidates(
+    P.postprocessed_precursor_clusters = postprocess_precursor_candidates(
+        P,
         P.tdf,
         P.ms1_events,
         P.raw_precursor_clusters,
@@ -945,25 +1058,28 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
     )
 
     P.section("Precursor Transmission")
-    P.precursor_transmission_config = R.write_precursor_transmission_config(
-        text=tomlkit.dumps(cfg.precursor_transmission)
+    P.precursor_transmission_config = write_precursor_transmission_config(
+        P, text=tomlkit.dumps(cfg.precursor_transmission)
     )
     P.transmitted_ms1events, P.transmitted_precursor_clusters = (
-        R.transmit_precursors_into_fragment_space(
+        transmit_precursors_into_fragment_space(
+            P,
             P.tdf,
             P.postprocessed_precursor_clusters,
             P.precursor_transmission_config,
         )
     )
 
-    P.first_filter_precursors = R.filter_first_precursors(
+    P.first_filter_precursors = filter_first_precursors(
+        P,
         P.transmitted_precursor_clusters,
         filter=cfg.precursor_filters.mkpmsms.get("filter", ""),
     )
 
     P.section("Pseudo-MS/MS Assembly")
-    P.pseudomsms_config = R.write_pseudomsms_config(text=tomlkit.dumps(cfg.pseudomsms))
-    P.pmsms = R.run_mkpmsms_binary(
+    P.pseudomsms_config = write_pseudomsms_config(P, text=tomlkit.dumps(cfg.pseudomsms))
+    P.pmsms = run_mkpmsms_binary(
+        P,
         P.ms2_events,
         P.transmitted_ms1events,
         P.first_filter_precursors,
@@ -971,67 +1087,84 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
     )
 
     P.section("Precursor Indexing")
-    P.ms2indexed_precursors = R.cut_and_index_precursors(
-        P.first_filter_precursors, P.pmsms
+    P.ms2indexed_precursors = cut_and_index_precursors(
+        P, P.first_filter_precursors, P.pmsms
     )
 
-    P.pre_sage_filtered_precursors = R.filter_pre_sage_precursors(
+    P.pre_sage_filtered_precursors = filter_pre_sage_precursors(
+        P,
         P.ms2indexed_precursors,
         filter=cfg.precursor_filters.pre_sage.get("filter", ""),
     )
 
     P.section("Neighbor Graph")
-    P.precursor_neighbors_config = R.write_precursor_neighbors_config(
-        text=tomlkit.dumps(cfg.precursor_neighbors)
+    P.precursor_neighbors_config = write_precursor_neighbors_config(
+        P, text=tomlkit.dumps(cfg.precursor_neighbors)
     )
-    P.precursor_grid_index = R.build_precursor_grid_index(
+    P.precursor_grid_index = build_precursor_grid_index(
+        P,
         P.pre_sage_filtered_precursors,
         P.tdf,
         P.precursor_neighbors_config,
     )
-    P.precursor_neighbors_csr = R.compute_precursor_neighbors(
+    P.precursor_neighbors_csr = compute_precursor_neighbors(
+        P,
         P.precursor_grid_index,
         P.tdf,
         P.precursor_neighbors_config,
     )
 
     P.section("ToF Score Filtering")
-    P.neighbor_score = R.tof_score_filter(P.pmsms, P.precursor_neighbors_csr)
+    P.neighbor_score = tof_score_filter(P, P.pmsms, P.precursor_neighbors_csr)
 
-    P.tof_filtered_pmsms, P.tof_filtered_precursors = R.materialize_tof_filtered_pmsms(
+    P.tof_filtered_pmsms, P.tof_filtered_precursors = materialize_tof_filtered_pmsms(
+        P,
         P.pmsms,
         P.pre_sage_filtered_precursors,
         P.neighbor_score,
         score_margin=cfg.tof_score_filter.score_margin,
     )
 
-    P.plain_mzml, P.plain_mzml_idmap = R.convert_pmsms_to_mzml(
-        P.pmsms, P.pre_sage_filtered_precursors, P.tof2mz,
+    P.plain_mzml, P.plain_mzml_idmap = convert_pmsms_to_mzml(
+        P,
+        P.pmsms,
+        P.pre_sage_filtered_precursors,
+        P.tof2mz,
     )
-    P.plain_mgf = R.convert_pmsms_to_mgf(
-        P.pmsms, P.pre_sage_filtered_precursors, P.tof2mz,
+    P.plain_mgf = convert_pmsms_to_mgf(
+        P,
+        P.pmsms,
+        P.pre_sage_filtered_precursors,
+        P.tof2mz,
     )
-    P.tof_filtered_mzml, P.tof_filtered_mzml_idmap = R.convert_tof_filtered_to_mzml(
-        P.tof_filtered_pmsms, P.tof_filtered_precursors, P.tof2mz,
+    P.tof_filtered_mzml, P.tof_filtered_mzml_idmap = convert_tof_filtered_to_mzml(
+        P,
+        P.tof_filtered_pmsms,
+        P.tof_filtered_precursors,
+        P.tof2mz,
     )
-    P.tof_filtered_mgf = R.convert_tof_filtered_to_mgf(
-        P.tof_filtered_pmsms, P.tof_filtered_precursors, P.tof2mz,
+    P.tof_filtered_mgf = convert_tof_filtered_to_mgf(
+        P,
+        P.tof_filtered_pmsms,
+        P.tof_filtered_precursors,
+        P.tof2mz,
     )
 
     P.section("Search")
 
     if "sage" in cfg:
-        P.sage_config = R.write_sage_config(
-            text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
+        P.sage_config = write_sage_config(
+            P, text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
         )
 
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
-                R.write_recalibration_precursor_selection_config(
-                    text=tomlkit.dumps(cfg.recalibration_precursor_selection)
+                write_recalibration_precursor_selection_config(
+                    P, text=tomlkit.dumps(cfg.recalibration_precursor_selection)
                 )
             )
-            P.recalibration_precursors = R.select_recalibration_precursors(
+            P.recalibration_precursors = select_recalibration_precursors(
+                P,
                 P.tof_filtered_precursors,
                 P.recalibration_precursor_selection_config,
             )
@@ -1040,54 +1173,60 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
                 P.filtered_sage_results_pin,
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
-            ) = R.run_sage(
+            ) = run_sage(
+                P,
                 P.tof_filtered_pmsms,
                 P.tof2mz,
                 P.recalibration_precursors,
                 P.fasta,
                 P.sage_config,
             )
-            P.recalibration_config = R.write_recalibration_config(
-                text=tomlkit.dumps(cfg.recalibration)
+            P.recalibration_config = write_recalibration_config(
+                P, text=tomlkit.dumps(cfg.recalibration)
             )
-            P.recalibrated_tof2mz, P.recalibration_tolerance = R.recalibrate_mz(
+            P.recalibrated_tof2mz, P.recalibration_tolerance = recalibrate_mz(
+                P,
                 P.filtered_sage_results_tsv,
                 P.tof2mz,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
-            P.recalibrated_precursors = R.recalibrate_precursor_mz(
+            P.recalibrated_precursors = recalibrate_precursor_mz(
+                P,
                 P.filtered_sage_results_tsv,
                 P.tof_filtered_precursors,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
-            P.recalibrated_sage_config = R.update_sage_config(
-                P.sage_config, P.recalibration_tolerance
+            P.recalibrated_sage_config = update_sage_config(
+                P, P.sage_config, P.recalibration_tolerance
             )
             (
                 P.sage_results_json,
                 P.sage_results_pin,
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
-            ) = R.run_sage(
+            ) = run_sage(
+                P,
                 P.tof_filtered_pmsms,
                 P.recalibrated_tof2mz,
                 P.recalibrated_precursors,
                 P.fasta,
                 P.recalibrated_sage_config,
             )
-            P.confident_psms = R.filter_sage_results(
-                P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+            P.confident_psms = filter_sage_results(
+                P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
             )
-            P.sage_pmsms_mapping = R.sage_map_to_pmsms(
+            P.sage_pmsms_mapping = sage_map_to_pmsms(
+                P,
                 P.confident_psms,
                 P.sage_matched_fragments,
                 P.tof_filtered_precursors,
                 P.tof_filtered_pmsms,
                 P.recalibrated_tof2mz,
             )
-            P.score_comparison = R.score_comparison(
+            P.score_comparison = score_comparison(
+                P,
                 P.tof_filtered_precursors,
                 P.tof_filtered_pmsms,
                 P.sage_pmsms_mapping,
@@ -1099,57 +1238,58 @@ def ionmaiden_pipeline(config: dict) -> Pipeline:
                 P.sage_results_pin,
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
-            ) = R.run_sage(
+            ) = run_sage(
+                P,
                 P.tof_filtered_pmsms,
                 P.tof2mz,
                 P.tof_filtered_precursors,
                 P.fasta,
                 P.sage_config,
             )
-            P.confident_psms = R.filter_sage_results(
-                P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+            P.confident_psms = filter_sage_results(
+                P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
             )
-            P.sage_pmsms_mapping = R.sage_map_to_pmsms(
+            P.sage_pmsms_mapping = sage_map_to_pmsms(
+                P,
                 P.confident_psms,
                 P.sage_matched_fragments,
                 P.tof_filtered_precursors,
                 P.tof_filtered_pmsms,
                 P.tof2mz,
             )
-            P.score_comparison = R.score_comparison(
+            P.score_comparison = score_comparison(
+                P,
                 P.tof_filtered_precursors,
                 P.tof_filtered_pmsms,
                 P.sage_pmsms_mapping,
                 P.pseudomsms_config,
             )
 
-        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = R.mokapot(
-            P.sage_results_pin
+        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
+            P, P.sage_results_pin
         )
 
         P.section("FDR Summary")
-        P.sage_summary = R.sage_summarize(
-            P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+        P.sage_summary = sage_summarize(
+            P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
         )
 
     if "fragpipe" in cfg:
-        P.fragpipe_workflow = R.source_fragpipe_workflow(
-            path=cfg.fragpipe.workflow_path
+        P.fragpipe_workflow = source_fragpipe_workflow(
+            P, path=cfg.fragpipe.workflow_path
         )
         # Standalone: not an input to run_fragpipe. Point database.db-path= at
         # this file's output yourself -- see FragpipeDecoyFasta's docstring.
-        P.fragpipe_decoy_fasta = R.generate_fragpipe_decoy_fasta(P.fasta)
-        P.fragpipe_manifest = R.write_fragpipe_manifest(P.tof_filtered_mzml)
-        P.fragpipe_results_dir = R.run_fragpipe(
-            P.fragpipe_manifest, P.fragpipe_workflow, ram=cfg.fragpipe.get("ram", 0)
+        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P, P.fasta)
+        P.fragpipe_manifest = write_fragpipe_manifest(P, P.tof_filtered_mzml)
+        P.fragpipe_results_dir = run_fragpipe(
+            P, P.fragpipe_manifest, P.fragpipe_workflow, ram=cfg.fragpipe.get("ram", 0)
         )
-        P.fragpipe_log = R.extract_fragpipe_log(P.fragpipe_results_dir)
-        P.fragpipe_summary = R.summarize_fragpipe(P.fragpipe_log)
-
-    return P
+        P.fragpipe_log = extract_fragpipe_log(P, P.fragpipe_results_dir)
+        P.fragpipe_summary = summarize_fragpipe(P, P.fragpipe_log)
 
 
-def fragpipe_synthetic_pipeline(config: dict) -> Pipeline:
+def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     """FragPipe smoke test on simulated data -- no Bruker .d input, no Sage.
 
     1. Simulate tryptic peptides from cfg.fasta_path (a small multi-protein FASTA)
@@ -1171,11 +1311,11 @@ def fragpipe_synthetic_pipeline(config: dict) -> Pipeline:
     produced valid output from the same simulate_peptides_to_pmsms run.
     """
     cfg: DotDict = DotDict.Recursive(config)
-    P = Pipeline()
 
     P.section("Peptide Simulation")
-    P.fasta = R.source_fasta(path=cfg.fasta_path)
-    P.synthetic_pmsms, P.synthetic_precursors = R.simulate_peptides_to_pmsms(
+    P.fasta = source_fasta(P, path=cfg.fasta_path)
+    P.synthetic_pmsms, P.synthetic_precursors = simulate_peptides_to_pmsms(
+        P,
         P.fasta,
         charges=cfg.get("simulation", {}).get("charges", "2,3"),
         max_peptides_per_protein=cfg.get("simulation", {}).get(
@@ -1187,22 +1327,30 @@ def fragpipe_synthetic_pipeline(config: dict) -> Pipeline:
     P.section("Spectrum File Creation")
     output_format = cfg.get("output_format", "mzml")
     if output_format == "mzml":
-        P.synthetic_mzml, P.synthetic_mzml_idmap = R.convert_synthetic_pmsms_to_mzml(
-            P.synthetic_pmsms, P.synthetic_precursors,
+        P.synthetic_mzml, P.synthetic_mzml_idmap = convert_synthetic_pmsms_to_mzml(
+            P,
+            P.synthetic_pmsms,
+            P.synthetic_precursors,
         )
 
         P.section("FragPipe Search")
-        P.fragpipe_workflow = R.source_fragpipe_workflow(path=cfg.fragpipe.workflow_path)
-        P.fragpipe_decoy_fasta = R.generate_fragpipe_decoy_fasta(P.fasta)
-        P.fragpipe_manifest = R.write_fragpipe_manifest(P.synthetic_mzml)
-        P.fragpipe_results_dir = R.run_fragpipe(P.fragpipe_manifest, P.fragpipe_workflow)
-        P.fragpipe_log = R.extract_fragpipe_log(P.fragpipe_results_dir)
-        P.fragpipe_summary = R.summarize_fragpipe(P.fragpipe_log)
+        P.fragpipe_workflow = source_fragpipe_workflow(
+            P, path=cfg.fragpipe.workflow_path
+        )
+        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P, P.fasta)
+        P.fragpipe_manifest = write_fragpipe_manifest(P, P.synthetic_mzml)
+        P.fragpipe_results_dir = run_fragpipe(
+            P, P.fragpipe_manifest, P.fragpipe_workflow
+        )
+        P.fragpipe_log = extract_fragpipe_log(P, P.fragpipe_results_dir)
+        P.fragpipe_summary = summarize_fragpipe(P, P.fragpipe_log)
     elif output_format == "mgf":
-        P.synthetic_mgf = R.convert_synthetic_pmsms_to_mgf(
-            P.synthetic_pmsms, P.synthetic_precursors,
+        P.synthetic_mgf = convert_synthetic_pmsms_to_mgf(
+            P,
+            P.synthetic_pmsms,
+            P.synthetic_precursors,
         )
     else:
-        raise ValueError(f"cfg.output_format must be 'mzml' or 'mgf', got {output_format!r}")
-
-    return P
+        raise ValueError(
+            f"cfg.output_format must be 'mzml' or 'mgf', got {output_format!r}"
+        )
