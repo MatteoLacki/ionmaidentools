@@ -96,10 +96,11 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import NodeType, Pipeline, command, output, text_file
+from necroflow import CommandArgs, NodeType, Pipeline, command, output, text_file
 
 CORES = os.cpu_count() or 1
 
@@ -248,7 +249,13 @@ class SageResultsJson(NodeType):
     filename = "results.json"
 
 
-class SageResultsPin(NodeType):
+class Pin(NodeType):
+    """A Percolator-IN TSV: SpecId, Label, ScanNr, <features...>, Peptide,
+    Proteins. Format is generic (nothing Sage-specific) -- `SageResultsPin`
+    and `SagepyRescorePin` both satisfy it, so `mokapot` accepts either."""
+
+
+class SageResultsPin(Pin):
     filename = "results.sage.pin"
 
 
@@ -258,6 +265,18 @@ class SageResultsTsv(NodeType):
 
 class SageMatchedFragments(NodeType):
     filename = "matched_fragments.sage.tsv"
+
+
+class SagepyRescoreConfig(NodeType):
+    filename = "sagepy_rescore_config.toml"
+
+
+class SagepyRescorePredictions(NodeType):
+    filename = "psms_with_predictions.parquet"
+
+
+class SagepyRescorePin(Pin):
+    filename = "sagepy_rescore.pin"
 
 
 class MokapotUsedPin(NodeType):
@@ -787,17 +806,70 @@ def run_sage(
     return results_json, results_pin, results_tsv, matched_fragments
 
 
-@command(
-    "venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {sage_results_pin} -o {used_pin}"
-    " && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
-    " --train_fdr 0.05 --test_fdr 0.01"
-    " && test -f {peptides} && test -f {psms}"
-)
-def mokapot(sage_results_pin: SageResultsPin):
+def _mokapot_command(args: CommandArgs) -> str:
+    """Python command callback, not a static template -- lets `--plugin`
+    be added conditionally (empty for the plain-Sage-PIN call, `--plugin
+    xgboost` for the sagepy-rescore call) without necroflow's string-
+    template placeholders needing to express a conditional substring.
+    """
+    pin = shlex.quote(str(args.inputs.pin))
+    used_pin = shlex.quote(str(args.outputs.used_pin))
+    peptides = shlex.quote(str(args.outputs.peptides))
+    psms = shlex.quote(str(args.outputs.psms))
+    workdir = shlex.quote(str(args.workdir))
+    plugin_flag = f" --plugin {args.config.plugin}" if args.config.plugin else ""
+    return (
+        f"venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {pin} -o {used_pin}"
+        f" && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
+        f" --train_fdr {args.config.train_fdr} --test_fdr {args.config.test_fdr}"
+        f"{plugin_flag}"
+        f" && test -f {peptides} && test -f {psms}"
+    )
+
+
+@command(_mokapot_command)
+def mokapot(
+    pin: Pin,
+    train_fdr: float = 0.05,
+    test_fdr: float = 0.01,
+    plugin: str | None = None,
+):
     used_pin = output(MokapotUsedPin)
     peptides = output(MokapotPeptides)
     psms = output(MokapotPsms)
     return used_pin, peptides, psms
+
+
+@text_file
+def write_sagepy_rescore_config(text: str):
+    config = output(SagepyRescoreConfig)
+    return config
+
+
+@command(
+    "venvs/sagepy_rescore/bin/sagepy-rescore-from-sage"
+    " --psms-parquet {sage_results_tsv} --matched-fragments-parquet {sage_matched_fragments}"
+    " --output {workdir}"
+    " --with-predictors --predict-only"
+    " --config {config}"
+    " && test -f {predictions}"
+)
+def run_sagepy_rescore_predict(
+    sage_results_tsv: SageResultsTsv,
+    sage_matched_fragments: SageMatchedFragments,
+    config: SagepyRescoreConfig,
+):
+    predictions = output(SagepyRescorePredictions)
+    return predictions
+
+
+@command(
+    "venvs/sagepy_rescore/bin/python scripts/write_sagepy_rescore_pin.py"
+    " -i {predictions} -o {pin}"
+)
+def write_sagepy_rescore_pin(predictions: SagepyRescorePredictions):
+    pin = output(SagepyRescorePin)
+    return pin
 
 
 @command("venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}")
@@ -1274,6 +1346,31 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
             P, P.sage_results_pin
         )
+
+        if "sagepy_rescore" in cfg:
+            P.sagepy_rescore_config = write_sagepy_rescore_config(
+                P, text=tomlkit.dumps(cfg.sagepy_rescore)
+            )
+            P.sagepy_rescore_predictions = run_sagepy_rescore_predict(
+                P,
+                P.sage_results_tsv,
+                P.sage_matched_fragments,
+                P.sagepy_rescore_config,
+            )
+            P.sagepy_rescore_pin = write_sagepy_rescore_pin(
+                P, P.sagepy_rescore_predictions
+            )
+            (
+                P.sagepy_rescore_used_pin,
+                P.sagepy_rescore_peptides,
+                P.sagepy_rescore_psms,
+            ) = mokapot(
+                P,
+                P.sagepy_rescore_pin,
+                train_fdr=cfg.sagepy_rescore.get("train_fdr", 0.01),
+                test_fdr=cfg.sagepy_rescore.get("test_fdr", 0.01),
+                plugin="xgboost",
+            )
 
         P.section("FDR Summary")
         P.sage_summary = sage_summarize(
