@@ -84,12 +84,12 @@ standalone output (`P.fragpipe_decoy_fasta`), deliberately *not* wired into
 `database.db-path=` at run time, reopening the "plain data file, never patched" design
 above. For now, point that line at `generate_fragpipe_decoy_fasta`'s output by hand.
 
-Migrated from necroflow's main-branch `Rules()`/`@R.command`/`Type[name]`/
+Migrated from necroflow's old `Rules()`/`@R.command`/`Type[name]`/
 `factory(config) -> Pipeline` API to the current explicit `@command`/`output()`/
-`factory(P, config) -> None` API (see necroflow's `skills/update.md`). Node names,
-commands, config semantics, and requested labels are unchanged; only the API shape
-changed. Fingerprint v2 changes node addresses, so cached node directories from
-before this migration are not reused -- every job recomputes from scratch once.
+`factory(P, config) -> None` API. Node names, commands, config semantics, and requested
+labels are unchanged; only the API shape changed. Fingerprint v3 uses separate rule and
+provenance hashes in node addresses, so cached node directories from older fingerprint
+versions are not reused.
 """
 
 from __future__ import annotations
@@ -1073,16 +1073,16 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     """tof-filtered Sage search chain reproducing the old short_test Snakemake target."""
     cfg = DotDict.Recursive(config)
 
-    P.section("Acquisition")
+    # Acquisition
     P.tdf = source_bruker_d(P, path=cfg.tdf_path)
     P.fasta = source_fasta(P, path=cfg.fasta_path)
 
-    P.section("Raw Extraction")
+    # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
     P.ms2_events = tdf2ms2(P, P.tdf)
     P.tof2mz = tdf2tof2mz(P, P.tdf, P.ms2_events)
 
-    P.section("MS1 Scale Calibration")
+    # MS1 Scale Calibration
     P.scale_estimation_config = write_scale_estimation_config(
         P, text=tomlkit.dumps(cfg.scale_estimation)
     )
@@ -1100,7 +1100,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.scale_estimation_config,
     )
 
-    P.section("Precursor Selection")
+    # Precursor Selection
     P.precursor_neighbor_count_config = write_precursor_neighbor_count_config(
         P, text=tomlkit.dumps(cfg.precursor_neighbor_count)
     )
@@ -1121,7 +1121,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.precursor_candidate_selection_config,
     )
 
-    P.section("Precursor Postprocessing")
+    # Precursor Postprocessing
     P.precursor_annotation_config = write_precursor_annotation_config(
         P, text=tomlkit.dumps(cfg.precursor_annotation)
     )
@@ -1144,7 +1144,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.postprocessing_config,
     )
 
-    P.section("Precursor Transmission")
+    # Precursor Transmission
     P.precursor_transmission_config = write_precursor_transmission_config(
         P, text=tomlkit.dumps(cfg.precursor_transmission)
     )
@@ -1163,7 +1163,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         filter=cfg.precursor_filters.mkpmsms.get("filter", ""),
     )
 
-    P.section("Pseudo-MS/MS Assembly")
+    # Pseudo-MS/MS Assembly
     P.pseudomsms_config = write_pseudomsms_config(P, text=tomlkit.dumps(cfg.pseudomsms))
     P.pmsms = run_mkpmsms_binary(
         P,
@@ -1173,7 +1173,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.pseudomsms_config,
     )
 
-    P.section("Precursor Indexing")
+    # Precursor Indexing
     P.ms2indexed_precursors = cut_and_index_precursors(
         P, P.first_filter_precursors, P.pmsms
     )
@@ -1184,7 +1184,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         filter=cfg.precursor_filters.pre_sage.get("filter", ""),
     )
 
-    P.section("Neighbor Graph")
+    # Neighbor Graph
     if "precursor_neighbors" in cfg:
         P.precursor_neighbors_config = write_precursor_neighbors_config(
             P, text=tomlkit.dumps(cfg.precursor_neighbors)
@@ -1208,7 +1208,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             "or remove [tof_score_filter]."
         )
 
-    P.section("ToF Score Filtering")
+    # ToF Score Filtering
     if "tof_score_filter" in cfg:
         P.neighbor_score = tof_score_filter(P, P.pmsms, P.precursor_neighbors_csr)
 
@@ -1236,7 +1236,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.tof2mz,
     )
 
-    P.section("Search")
+    # Search
 
     if "sage" in cfg:
         P.sage_config = write_sage_config(
@@ -1383,7 +1383,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 plugin="xgboost",
             )
 
-        P.section("FDR Summary")
+        # FDR Summary
         P.sage_summary = sage_summarize(
             P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
         )
@@ -1426,7 +1426,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     """
     cfg: DotDict = DotDict.Recursive(config)
 
-    P.section("Peptide Simulation")
+    # Peptide Simulation
     P.fasta = source_fasta(P, path=cfg.fasta_path)
     P.synthetic_pmsms, P.synthetic_precursors = simulate_peptides_to_pmsms(
         P,
@@ -1438,7 +1438,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
         seed=cfg.get("simulation", {}).get("seed", 20260715),
     )
 
-    P.section("Spectrum File Creation")
+    # Spectrum File Creation
     output_format = cfg.get("output_format", "mzml")
     if output_format == "mzml":
         P.synthetic_mzml, P.synthetic_mzml_idmap = convert_synthetic_pmsms_to_mzml(
@@ -1447,7 +1447,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
             P.synthetic_precursors,
         )
 
-        P.section("FragPipe Search")
+        # FragPipe Search
         P.fragpipe_workflow = source_fragpipe_workflow(
             P, path=cfg.fragpipe.workflow_path
         )
