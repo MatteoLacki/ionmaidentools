@@ -846,6 +846,14 @@ def write_sagepy_rescore_config(text: str):
     return config
 
 
+def _sagepy_rescore_prediction_config(config: dict) -> dict:
+    """Remove settings owned by the downstream mokapot rule."""
+    prediction_config = dict(config)
+    prediction_config.pop("train_fdr", None)
+    prediction_config.pop("test_fdr", None)
+    return prediction_config
+
+
 @command(
     "venvs/sagepy_rescore/bin/sagepy-rescore-from-sage"
     " --psms-parquet {sage_results_tsv} --matched-fragments-parquet {sage_matched_fragments}"
@@ -1348,8 +1356,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         )
 
         if "sagepy_rescore" in cfg:
+            prediction_config = _sagepy_rescore_prediction_config(
+                cfg.sagepy_rescore
+            )
             P.sagepy_rescore_config = write_sagepy_rescore_config(
-                P, text=tomlkit.dumps(cfg.sagepy_rescore)
+                P, text=tomlkit.dumps(prediction_config)
             )
             P.sagepy_rescore_predictions = run_sagepy_rescore_predict(
                 P,
