@@ -433,6 +433,10 @@ class RecalibratedPrecursors(TofFilteredPrecursors):
     filename = "recalibrated_precursors.mmappet"
 
 
+class RecalibratedPpmPlot(Png):
+    filename = "recalibrated_ppm.png"
+
+
 # --- source rules (symlink pre-existing files/dirs, no validation) ---
 @command("ln -s $(realpath {path}) {tdf}")
 def source_bruker_d(path: str):
@@ -773,6 +777,22 @@ def recalibrate_precursor_mz(
 ):
     recalibrated_precursors = output(RecalibratedPrecursors)
     return recalibrated_precursors
+
+
+@command(
+    "venvs/common/bin/plot-recalibrated-ppm {initial_sage_results_tsv} {sage_results_tsv}"
+    " {initial_matched_fragments} {matched_fragments} {tolerance} {plot} --fdr {fdr}"
+)
+def plot_recalibrated_ppm(
+    initial_sage_results_tsv: SageResultsTsv,
+    sage_results_tsv: SageResultsTsv,
+    initial_matched_fragments: SageMatchedFragments,
+    matched_fragments: SageMatchedFragments,
+    tolerance: RecalibrationTolerance,
+    fdr: int | float,
+):
+    plot = output(RecalibratedPpmPlot)
+    return plot
 
 
 @command(
@@ -1315,6 +1335,15 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.recalibrated_precursors,
                 P.fasta,
                 P.recalibrated_sage_config,
+            )
+            P.recalibrated_ppm_plot = plot_recalibrated_ppm(
+                P,
+                P.filtered_sage_results_tsv,
+                P.sage_results_tsv,
+                P.filtered_sage_matched_fragments,
+                P.sage_matched_fragments,
+                P.recalibration_tolerance,
+                fdr=cfg.sage_summarize.fdr,
             )
             P.confident_psms = filter_sage_results(
                 P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
