@@ -331,6 +331,10 @@ class TarGz(NodeType):
     filename = "archive.tar.gz"
 
 
+class Png(NodeType):
+    pass
+
+
 class FragpipeWorkflow(NodeType):
     """A hand-maintained FragPipe `.workflow` file -- treated as a data file
     like Fasta/BrukerD, symlinked in as-is. Never generated or patched by
@@ -414,6 +418,10 @@ class RecalibrationConfig(NodeType):
 
 class RecalibrationTolerance(NodeType):
     filename = "recalibration_tolerance.json"
+
+
+class RecalibrationFitPlot(Png):
+    filename = "recalibration_fit.png"
 
 
 class RecalibratedPrecursors(TofFilteredPrecursors):
@@ -737,18 +745,20 @@ def write_recalibration_config(text: str):
 
 
 @command(
-    "venvs/common/bin/recalibrate-mz {sage_results_tsv} {tof2mz}"
-    " {recalibrated_tof2mz} {tolerance} --config {config} --fdr {fdr}"
+    "venvs/common/bin/recalibrate-mz {sage_results_tsv} {matched_fragments} {tof2mz}"
+    " {recalibrated_tof2mz} {tolerance} {plot} --config {config} --fdr {fdr}"
 )
 def recalibrate_mz(
     sage_results_tsv: SageResultsTsv,
+    matched_fragments: SageMatchedFragments,
     tof2mz: Tof2Mz,
     config: RecalibrationConfig,
     fdr: int | float,
 ):
     recalibrated_tof2mz = output(Tof2Mz)
     tolerance = output(RecalibrationTolerance)
-    return recalibrated_tof2mz, tolerance
+    plot = output(RecalibrationFitPlot)
+    return recalibrated_tof2mz, tolerance, plot
 
 
 @command(
@@ -790,7 +800,8 @@ def write_sage_config(text: str):
     " --output_directory {workdir} --pmsms {pmsms} --tof2mz {tof2mz} --precursors {precursors}"
     " {sage_config}"
     " && test -f {results_json} && test -f {results_pin}"
-    " && test -f {results_tsv} && test -f {matched_fragments}"
+    " && test -f {results_tsv} && test -f {matched_fragments}",
+    threads=CORES,
 )
 def run_sage(
     pmsms: Pmsms,
@@ -1270,9 +1281,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.recalibration_config = write_recalibration_config(
                 P, text=tomlkit.dumps(cfg.recalibration)
             )
-            P.recalibrated_tof2mz, P.recalibration_tolerance = recalibrate_mz(
+            (
+                P.recalibrated_tof2mz,
+                P.recalibration_tolerance,
+                P.recalibration_fit_plot,
+            ) = recalibrate_mz(
                 P,
                 P.filtered_sage_results_tsv,
+                P.filtered_sage_matched_fragments,
                 P.tof2mz,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
