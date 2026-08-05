@@ -1,95 +1,10 @@
-"""necroflow migration of necromerge2's Snakemake `short_test` chain.
-
-First-pass scope only: tof-filtered branch, through `sage_summarize`. Plain-MGF/mzML,
-`studies.smk`, and the `configs.smk` config generator are not ported.
-
-Config fields travel as explicit named kwargs, one per fixed config field, straight from
-the job TOML's own parsed dict -- no config file, no blob -- except where a tool's own
-config table is already shaped like the file the tool wants to read (Sage's JSON config,
-timstofu's scale-estimation TOML): there, necroflow's built-in `text_file` rule writes
-the table straight to a cached node file instead of exploding it into a flag per field.
-The external tools this pipeline shells out to (timstofu/quadops/boxing) were patched to
-accept fields as flags directly, with their old config-file argument made optional (and
-still positionally compatible with the old Snakemake pipeline) -- `ms1_find_argmaxes`/
-`ms1_fit_scale_estimates` keep that optional TOML `settings_path` argument, which is what
-`write_scale_estimation_config` now feeds. `git/ionmaidenmetal`'s `mkpmsms` C++ binary got
-the same treatment the other direction: it previously had no config-file option at all
-(`[pseudomsms]`'s algorithm-dependent flag set was hand-exploded via a `_cli_flags` dict-
-to-flags helper, ported verbatim from the old Snakemake rule), so `--config <path.toml>`
-was added to its shared `ParamTree` CLI parser (`param_tree.hpp`) -- `write_pseudomsms_config`
-now feeds it `cfg.pseudomsms` directly, same as the Python tools, and `_cli_flags` is gone.
-Every rule invokes a real installed CLI directly (no custom Python wrapper CLIs). Sage's
-own JSON config file is generated separately by `write_sage_config` straight from
-`cfg.sage`, which already matches Sage's config schema 1:1. `run_sage` passes the pmsms,
-tof2mz, and precursors mmappet datasets straight to Sage's `--pmsms`/`--tof2mz`/
-`--precursors` flags (`software/sage/devel_fixed`, a patched fork -- upstream Sage only
-takes mzML/MGF/TDF paths and reads `precursors.parquet` from a fixed-filename directory;
-this fork reads all three inputs as explicit paths, precursors as `.mmappet` directly, no
-staging directory or format conversion needed). Sage's four fixed-name output files
-(`results.json`, `results.sage.pin`, `results.sage.tsv`, `matched_fragments.sage.tsv`)
-are each their own typed necroflow output -- written straight into the rule call's shared
-`{workdir}`, not wrapped in an opaque directory NodeType, since `SageResultsJson`/
-`SageResultsPin`/`SageResultsTsv`/`SageMatchedFragments`'s filenames already match what
-Sage itself writes there.
+"""Necroflow ionmaiden pipeline.
 
 TODO(regression-db): the old Snakemake `sage_summarize`/`short_test` rules recorded
 results into a SQLite regression DB and did an interactive baseline comparison. Neither
 is ported here -- `sage_summary` is the pipeline's terminal output.
 
-Optional m/z recalibration: when a job config has a `[recalibration]` section,
-`ionmaiden_pipeline` runs Sage twice. The first (calibration) pass searches a selected subset
-of `search_precursors` (`select_recalibration_precursors`, default top-K most
-intense, configurable via `[recalibration_precursor_selection]`) against the original
-`tof2mz`. Its confident, top-ranked, FDR-filtered PSMs are used to fit a single
-ppm-error-vs-(precursor)-m/z correction (`searchops.recalibration.fit_correction`),
-applied in two separate places: `recalibrate_mz` applies it to `tof2mz` (the
-ToF-bin-indexed lookup array Sage uses only for *fragment* m/z -- precursor m/z
-reaches Sage as an already-materialized column and is never looked up through
-`tof2mz`, so correcting `tof2mz` alone does not touch precursors, despite what an
-earlier version of this docstring claimed), and `recalibrate_precursor_mz` applies
-it directly to `search_precursors`'s own `mz` column, producing
-`recalibrated_precursors`. `recalibrate_mz` also derives shared `precursor_tol`/
-`fragment_tol` bounds from a user-specified percentile cut of the precursor residual
-error distribution (`update_sage_config`, via two chained `necroflow.tools.config_set`
-calls) -- fragment_tol reuses the precursor window rather than being computed from
-Sage's own `fragment_ppm`, which is an absolute-value quantity with no usable sign
-(see `sage_rescoring.md`). The second, final pass re-runs Sage with the corrected
-`tof2mz`, the corrected `recalibrated_precursors`, and the narrowed config. Jobs
-without `[recalibration]` keep today's single-pass behaviour untouched.
-
-Optional FragPipe comparison run: when a job config has a `[fragpipe]` section,
-`ionmaiden_pipeline` additionally runs FragPipe on the same `search_pmsms`/
-`search_precursors`/`tof2mz` Sage already searched, reproducing the old Snakemake
-`search_test` side-by-side comparison. `convert_search_pmsms_to_mzml` (`git/pmsms2mzml`)
-turns those into an mzML + idmap; `cfg.fragpipe.workflow_path` points at a FragPipe
-`.workflow` file, symlinked in as-is (unlike Sage's JSON config, this file is long,
-hand-maintained, and rarely changes -- treated as a data file, not something the
-pipeline dumps or patches; the user is responsible for its `database.db-path=` line
-already pointing at the right fasta). `run_fragpipe` shells out to a fixed, pre-installed
-`software/fragpipe/fragpipe-24.0` install (same fixed-path convention as Sage's own
-`software/sage/devel_fixed`). The old rule's log-scraping is the only result handling
-ported (`extract_fragpipe_log`/`summarize_fragpipe`) -- no run_info.json, no
-regression-DB recording, matching `sage_summarize`'s own current scope. Jobs without
-`[fragpipe]` are unaffected.
-
-Unlike Sage, FragPipe/Philosopher has no generate-decoys-at-search-time option -- its
-database must already contain them, verified empirically against a real FragPipe 24.0
-install (`philosopher database --custom fasta --nodecoys` fails outright with "Workspace
-not found" without a `workspace --init` first; without decoys at all, MSFragger runs fine
-but Percolator/ProteinProphet error out). `generate_fragpipe_decoy_fasta` covers this via
-FragPipe's own bundled Philosopher tool (`database --custom {fasta} --prefix rev_`,
-matching every bundled `.workflow`'s default `database.decoy-tag=rev_`). It's a
-standalone output (`P.fragpipe_decoy_fasta`), deliberately *not* wired into
-`run_fragpipe` -- keeping it a dependency would mean patching the `.workflow` file's
-`database.db-path=` at run time, reopening the "plain data file, never patched" design
-above. For now, point that line at `generate_fragpipe_decoy_fasta`'s output by hand.
-
-Migrated from necroflow's old `Rules()`/`@R.command`/`Type[name]`/
-`factory(config) -> Pipeline` API to the current explicit `@command`/`output()`/
-`factory(P, config) -> None` API. Node names, commands, config semantics, and requested
-labels are unchanged; only the API shape changed. Fingerprint v3 uses separate rule and
-provenance hashes in node addresses, so cached node directories from older fingerprint
-versions are not reused.
+Fingerprint v3 used.
 """
 
 from __future__ import annotations
@@ -371,7 +286,7 @@ class FragpipeDecoyFasta(NodeType):
     filename = "decoy_database.fas"
 
 
-class SyntheticPmsms(MmappetDataset):
+class SyntheticPmsms(Pmsms):
     """Fragment ions for peptides simulated from a FASTA (Koina-predicted, no
     real acquisition) -- see scripts/simulate_peptides_to_pmsms.py. mz is
     baked in directly (unlike TofFilteredPmsms's tof-index form), so
@@ -1022,6 +937,15 @@ def generate_fragpipe_decoy_fasta(fasta: Fasta):
 
 
 @command(
+    "sed -e 's|^database\\.db-path=.*|database.db-path={decoy_fasta}|'"
+    " {workflow} > {patched_workflow}"
+)
+def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDecoyFasta):
+    patched_workflow = output(FragpipeWorkflow)
+    return patched_workflow
+
+
+@command(
     "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
     " {fasta} {pmsms} {precursors}"
     " --charges {charges} --max-peptides-per-protein {max_peptides_per_protein}"
@@ -1437,12 +1361,16 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.fragpipe_workflow = source_fragpipe_workflow(
             P, path=cfg.fragpipe.workflow_path
         )
-        # Standalone: not an input to run_fragpipe. Point database.db-path= at
-        # this file's output yourself -- see FragpipeDecoyFasta's docstring.
         P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P, P.fasta)
+        P.fragpipe_workflow_patched = patch_fragpipe_workflow(
+            P, P.fragpipe_workflow, P.fragpipe_decoy_fasta
+        )
         P.fragpipe_manifest = write_fragpipe_manifest(P, P.search_mzml)
         P.fragpipe_results_dir = run_fragpipe(
-            P, P.fragpipe_manifest, P.fragpipe_workflow, ram=cfg.fragpipe.get("ram", 0)
+            P,
+            P.fragpipe_manifest,
+            P.fragpipe_workflow_patched,
+            ram=cfg.fragpipe.get("ram", 0),
         )
         P.fragpipe_log = extract_fragpipe_log(P, P.fragpipe_results_dir)
         P.fragpipe_summary = summarize_fragpipe(P, P.fragpipe_log)
@@ -1497,9 +1425,12 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
             P, path=cfg.fragpipe.workflow_path
         )
         P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P, P.fasta)
+        P.fragpipe_workflow_patched = patch_fragpipe_workflow(
+            P, P.fragpipe_workflow, P.fragpipe_decoy_fasta
+        )
         P.fragpipe_manifest = write_fragpipe_manifest(P, P.synthetic_mzml)
         P.fragpipe_results_dir = run_fragpipe(
-            P, P.fragpipe_manifest, P.fragpipe_workflow
+            P, P.fragpipe_manifest, P.fragpipe_workflow_patched
         )
         P.fragpipe_log = extract_fragpipe_log(P, P.fragpipe_results_dir)
         P.fragpipe_summary = summarize_fragpipe(P, P.fragpipe_log)
