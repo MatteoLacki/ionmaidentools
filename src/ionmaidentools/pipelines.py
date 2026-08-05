@@ -29,6 +29,10 @@ class Fasta(NodeType):
     filename = "fasta.fasta"
 
 
+class MkpmsmsBinary(NodeType):
+    filename = "mkpmsms"
+
+
 class MmappetDataset(NodeType):
     """Base type for outputs that are mmappet directories (see CLAUDE.md's
     "Precursor table format" convention). No `filename` of its own -- every
@@ -365,6 +369,12 @@ def source_fasta(path: str):
     return fasta
 
 
+@command("ln -s $(realpath {path}) {mkpmsms}")
+def source_mkpmsms_binary(path: str):
+    mkpmsms = output(MkpmsmsBinary)
+    return mkpmsms
+
+
 # --- compute rules ---
 @command(
     "venvs/common/bin/d2ms1 {tdf} {ms1}"
@@ -537,7 +547,7 @@ def write_pseudomsms_config(text: str):
 
 
 @command(
-    "git/ionmaidenmetal/build/mkpmsms --fragments {ms2} --transmitted-precursors {transprec}"
+    "{mkpmsms} --fragments {ms2} --transmitted-precursors {transprec}"
     " --precursors {filter_mm} --output {pmsms} --config {config}"
     " --threads {threads} --batch 1024"
     " && test -f {pmsms}/schema.txt && test -f {pmsms}/0.bin && test -f {pmsms}/1.bin && test -f {pmsms}/2.bin"
@@ -551,6 +561,7 @@ def write_pseudomsms_config(text: str):
     threads=CORES,
 )
 def run_mkpmsms_binary(
+    mkpmsms: MkpmsmsBinary,
     ms2: Ms2Events,
     transprec: TransmittedMs1Events,
     filter_mm: FirstFilterPrecursors,
@@ -1025,12 +1036,15 @@ def summarize_fragpipe(log: FragpipeLog):
 
 
 def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
-    """tof-filtered Sage search chain reproducing the old short_test Snakemake target."""
+    """Main IonMaiden pipeline."""
     cfg = DotDict.Recursive(config)
 
     # Acquisition
     P.tdf = source_bruker_d(P, path=cfg.tdf_path)
     P.fasta = source_fasta(P, path=cfg.fasta_path)
+    P.mkpmsms_binary = source_mkpmsms_binary(
+        P, path="git/ionmaidenmetal/build/mkpmsms"
+    ) # here to avoid rebuild but no rerun
 
     # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
@@ -1122,6 +1136,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.pseudomsms_config = write_pseudomsms_config(P, text=tomlkit.dumps(cfg.pseudomsms))
     P.pmsms = run_mkpmsms_binary(
         P,
+        P.mkpmsms_binary,
         P.ms2_events,
         P.transmitted_ms1events,
         P.first_filter_precursors,
