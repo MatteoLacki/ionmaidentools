@@ -1044,7 +1044,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.fasta = source_fasta(P, path=cfg.fasta_path)
     P.mkpmsms_binary = source_mkpmsms_binary(
         P, path="git/ionmaidenmetal/build/mkpmsms"
-    ) # here to avoid rebuild but no rerun
+    )
 
     # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
