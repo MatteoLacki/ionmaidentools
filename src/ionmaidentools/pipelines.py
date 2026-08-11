@@ -164,15 +164,16 @@ class MzPmsms(Pmsms):
 
 
 class MzRecalibration(NodeType):
-    """Fitted fragment m/z ppm-correction artifact (dimension "mz"), produced by
-    fit_mz_recalibration and consumed by recalibrate_pmsms_mz."""
+    """Grid-sampled fragment m/z ppm-correction artifact (dimension "mz"),
+    produced by recalibrate_pmsms_mz alongside the pmsms it already applied the
+    correction to -- kept for inspection/reuse, not re-consumed downstream."""
 
     filename = "mz_recalibration.mzcalib"
 
 
 class RecalibratedPmsms(MzPmsms):
-    """MzPmsms with its `mz` column corrected by an MzRecalibration, produced by
-    recalibrate_pmsms_mz. Accepted wherever MzPmsms (or, transitively, Pmsms) is."""
+    """MzPmsms with its `mz` column corrected in place by recalibrate_pmsms_mz.
+    Accepted wherever MzPmsms (or, transitively, Pmsms) is."""
 
     filename = "recalibrated_pmsms.mmappet"
 
@@ -268,7 +269,7 @@ class TarGz(NodeType):
 
 
 class Png(NodeType):
-    pass
+    filename = "plot.png"
 
 
 class FragpipeWorkflow(NodeType):
@@ -352,19 +353,32 @@ class RecalibrationConfig(NodeType):
     filename = "recalibration_config.toml"
 
 
-class RecalibrationTolerance(NodeType):
-    filename = "recalibration_tolerance.json"
+class FragmentTolerance(NodeType):
+    """Fragment-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
+    recalibrate_pmsms_mz from its own fitted model's residuals."""
+
+    filename = "fragment_tolerance.json"
 
 
-class RecalibrationFitPlot(Png):
-    filename = "recalibration_fit.png"
+class PrecursorTolerance(NodeType):
+    """Precursor-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
+    recalibrate_precursors from its own fitted model's residuals."""
+
+    filename = "precursor_tolerance.json"
+
+
+class SerializedMzModel(NodeType):
+    """A fitted searchops.models.MzCorrectionModel, dumped via its own save()
+    (inspection only -- recalibrate_pmsms_mz/recalibrate_precursors already
+    apply the model themselves, nothing downstream reads this back in)."""
+
+    filename = "mz_model"
 
 
 class RecalibratedPrecursors(TofFilteredPrecursors):
-    """search_precursors with `mz` corrected by the same ppm-error fit
-    fit_mz_recalibration derives for fragments -- accepted wherever
-    TofFilteredPrecursors (or, transitively, PreSageFilteredPrecursors) is, e.g.
-    run_sage's final-pass `precursors` input."""
+    """search_precursors with `mz` corrected by recalibrate_precursors's own
+    fitted model -- accepted wherever TofFilteredPrecursors (or, transitively,
+    PreSageFilteredPrecursors) is, e.g. run_sage's final-pass `precursors` input."""
 
     filename = "recalibrated_precursors.mmappet"
 
@@ -694,54 +708,52 @@ def materialize_pmsms_mz(input_pmsms: Pmsms, tdf: BrukerD):
 
 
 @command(
-    "venvs/common/bin/fit-mz-recalibration {sage_results_tsv} {matched_fragments} {mz_pmsms}"
-    " {mz_recalibration} {tolerance} {plot} --config {config} --fdr {fdr}"
+    "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments} {mz_pmsms}"
+    " {output_pmsms} {mz_recalibration} {tolerance} {plot} --config {config} --fdr {fdr}"
 )
-def fit_mz_recalibration(
+def recalibrate_pmsms_mz(
     sage_results_tsv: SageResultsTsv,
     matched_fragments: SageMatchedFragments,
     mz_pmsms: MzPmsms,
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    mz_recalibration = output(MzRecalibration)
-    tolerance = output(RecalibrationTolerance)
-    plot = output(RecalibrationFitPlot)
-    return mz_recalibration, tolerance, plot
-
-
-@command(
-    "venvs/common/bin/recalibrate_pmsms_mz {input_pmsms} {mz_recalibration} {output_pmsms}"
-)
-def recalibrate_pmsms_mz(input_pmsms: MzPmsms, mz_recalibration: MzRecalibration):
     output_pmsms = output(RecalibratedPmsms)
-    return output_pmsms
+    mz_recalibration = output(MzRecalibration)
+    tolerance = output(FragmentTolerance)
+    plot = output(Png)
+    return output_pmsms, mz_recalibration, tolerance, plot
 
 
 @command(
-    "venvs/common/bin/recalibrate-precursor-mz {sage_results_tsv} {precursors}"
-    " {recalibrated_precursors} --config {config} --fdr {fdr}"
+    "venvs/common/bin/recalibrate-precursors {sage_results_tsv} {precursors}"
+    " {output_precursors} {tolerance} {plot} {model} --config {config} --fdr {fdr}"
 )
-def recalibrate_precursor_mz(
+def recalibrate_precursors(
     sage_results_tsv: SageResultsTsv,
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    recalibrated_precursors = output(RecalibratedPrecursors)
-    return recalibrated_precursors
+    output_precursors = output(RecalibratedPrecursors)
+    tolerance = output(PrecursorTolerance)
+    plot = output(Png)
+    model = output(SerializedMzModel)
+    return output_precursors, tolerance, plot, model
 
 
 @command(
     "venvs/common/bin/plot-recalibrated-ppm {initial_sage_results_tsv} {sage_results_tsv}"
-    " {initial_matched_fragments} {matched_fragments} {tolerance} {plot} --fdr {fdr}"
+    " {initial_matched_fragments} {matched_fragments} {precursor_tolerance} {fragment_tolerance}"
+    " {plot} --fdr {fdr}"
 )
 def plot_recalibrated_ppm(
     initial_sage_results_tsv: SageResultsTsv,
     sage_results_tsv: SageResultsTsv,
     initial_matched_fragments: SageMatchedFragments,
     matched_fragments: SageMatchedFragments,
-    tolerance: RecalibrationTolerance,
+    precursor_tolerance: PrecursorTolerance,
+    fragment_tolerance: FragmentTolerance,
     fdr: int | float,
 ):
     plot = output(RecalibratedPpmPlot)
@@ -751,12 +763,16 @@ def plot_recalibrated_ppm(
 @command(
     ".venv/bin/python -m necroflow.tools.config_set"
     " {sage_config} {workdir}/precursor_tol_updated.json"
-    " --target precursor_tol --source {tolerance} --source-field precursor_tol"
+    " --target precursor_tol.ppm --source {precursor_tolerance} --source-field ppm"
     " && .venv/bin/python -m necroflow.tools.config_set"
     " {workdir}/precursor_tol_updated.json {recalibrated_sage_config}"
-    " --target fragment_tol --source {tolerance} --source-field fragment_tol"
+    " --target fragment_tol.ppm --source {fragment_tolerance} --source-field ppm"
 )
-def update_sage_config(sage_config: SageConfig, tolerance: RecalibrationTolerance):
+def update_sage_config(
+    sage_config: SageConfig,
+    precursor_tolerance: PrecursorTolerance,
+    fragment_tolerance: FragmentTolerance,
+):
     recalibrated_sage_config = output(SageConfig)
     return recalibrated_sage_config
 
@@ -1252,10 +1268,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P, text=tomlkit.dumps(cfg.recalibration)
             )
             (
-                P.mz_recalibration,
-                P.recalibration_tolerance,
-                P.recalibration_fit_plot,
-            ) = fit_mz_recalibration(
+                P.recalibrated_mz_pmsms,
+                P.fragment_mz_recalibration,
+                P.fragment_mz_search_tolerance,
+                P.fragment_mz_recalibration_fit_plot,
+            ) = recalibrate_pmsms_mz(
                 P,
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
@@ -1263,10 +1280,12 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
-            P.recalibrated_mz_pmsms = recalibrate_pmsms_mz(
-                P, P.search_mz_pmsms, P.mz_recalibration,
-            )
-            P.recalibrated_precursors = recalibrate_precursor_mz(
+            (
+                P.recalibrated_precursors,
+                P.precursor_mz_search_tolerance,
+                P.precursor_mz_recalibration_fit_plot,
+                P.precursro_mz_recalibration_model_serialization,
+            ) = recalibrate_precursors(
                 P,
                 P.filtered_sage_results_tsv,
                 P.search_precursors,
@@ -1274,7 +1293,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 fdr=cfg.sage_summarize.fdr,
             )
             P.recalibrated_sage_config = update_sage_config(
-                P, P.sage_config, P.recalibration_tolerance
+                P, P.sage_config, P.precursor_mz_search_tolerance, P.fragment_mz_search_tolerance,
             )
             (
                 P.sage_results_json,
@@ -1294,7 +1313,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_results_tsv,
                 P.filtered_sage_matched_fragments,
                 P.sage_matched_fragments,
-                P.recalibration_tolerance,
+                P.precursor_mz_search_tolerance,
+                P.fragment_mz_search_tolerance,
                 fdr=cfg.sage_summarize.fdr,
             )
             P.confident_psms = filter_sage_results(
