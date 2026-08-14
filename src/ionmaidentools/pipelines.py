@@ -15,7 +15,15 @@ import shlex
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import CommandArgs, NodeType, Pipeline, command, output, text_file
+from necroflow import (
+    CommandArgs,
+    NodeType,
+    Pipeline,
+    command,
+    output,
+    symlink_file,
+    text_file,
+)
 
 CORES = os.cpu_count() or 1
 
@@ -31,6 +39,14 @@ class Fasta(NodeType):
 
 class MkpmsmsBinary(NodeType):
     filename = "mkpmsms"
+
+
+class SageBinary(NodeType):
+    filename = "sage"
+
+
+class SageSummarizeModule(NodeType):
+    filename = "sage.py"
 
 
 class MmappetDataset(NodeType):
@@ -404,6 +420,19 @@ def source_fasta(path: str):
 def source_mkpmsms_binary(path: str):
     mkpmsms = output(MkpmsmsBinary)
     return mkpmsms
+
+
+@symlink_file
+def source_sage_binary(path: str):
+    sage_binary = output(SageBinary)
+    return sage_binary
+
+
+# Symlinked so edits to the installed-editable module invalidate sage_summarize.
+@symlink_file
+def source_sage_summarize_module(path: str):
+    sage_summarize_module = output(SageSummarizeModule)
+    return sage_summarize_module
 
 
 # --- compute rules ---
@@ -784,8 +813,8 @@ def write_sage_config(text: str):
 
 
 @command(
-    "software/sage/devel_fixed/sage --version"
-    " && software/sage/devel_fixed/sage -f {fasta} --annotate-matches --write-pin"
+    "{sage_binary} --version"
+    " && {sage_binary} -f {fasta} --annotate-matches --write-pin"
     " --output_directory {workdir} --pmsms {pmsms} --precursors {precursors}"
     " {sage_config}"
     " && test -f {results_json} && test -f {results_pin}"
@@ -797,6 +826,7 @@ def run_sage(
     precursors: PreSageFilteredPrecursors,
     fasta: Fasta,
     sage_config: SageConfig,
+    sage_binary: SageBinary,
 ):
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
@@ -880,7 +910,11 @@ def write_sagepy_rescore_pin(predictions: SagepyRescorePredictions):
 
 
 @command("venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}")
-def sage_summarize(sage_results_tsv: SageResultsTsv, fdr: int | float):
+def sage_summarize(
+    sage_results_tsv: SageResultsTsv,
+    sage_summarize_module: SageSummarizeModule,
+    fdr: int | float,
+):
     summary = output(SageSummary)
     return summary
 
@@ -1084,6 +1118,10 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.mkpmsms_binary = source_mkpmsms_binary(
         P, path="git/ionmaidenmetal/build/mkpmsms"
     )
+    P.sage_summarize_module = source_sage_summarize_module(
+        P, path="git/searchops/src/searchops/sage.py"
+    )
+    P.sage_binary = source_sage_binary(P, path="software/sage/devel_fixed/sage")
 
     # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
@@ -1263,6 +1301,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.recalibration_precursors,
                 P.fasta,
                 P.sage_config,
+                P.sage_binary,
             )
             P.recalibration_config = write_recalibration_config(
                 P, text=tomlkit.dumps(cfg.recalibration)
@@ -1306,6 +1345,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.recalibrated_precursors,
                 P.fasta,
                 P.recalibrated_sage_config,
+                P.sage_binary,
             )
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
                 P,
@@ -1347,6 +1387,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.search_precursors,
                 P.fasta,
                 P.sage_config,
+                P.sage_binary,
             )
             P.confident_psms = filter_sage_results(
                 P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
@@ -1400,7 +1441,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
         # FDR Summary
         P.sage_summary = sage_summarize(
-            P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+            P, P.sage_results_tsv, P.sage_summarize_module, fdr=cfg.sage_summarize.fdr
         )
 
     # Exports -- final_mz_pmsms is RecalibratedPmsms when recalibration ran,
