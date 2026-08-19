@@ -220,6 +220,24 @@ class SageMatchedFragments(NodeType):
     filename = "matched_fragments.sage.tsv"
 
 
+class DumpPeptidesBinary(NodeType):
+    filename = "dump_peptides"
+
+
+class DumpPeptidesConfig(NodeType):
+    """Just the `database` subdictionary of a `SageConfig` — the only
+    settings `dump_peptides` depends on (fasta, enzyme, mods, mass bounds,
+    decoy_tag). Sliced out of the full sage config by `extract_dump_peptides_config`
+    so `dump_peptides` itself never needs to read (or be valid against)
+    unrelated search settings like `precursor_tol`."""
+
+    filename = "dump_peptides_config.json"
+
+
+class DumpedPeptides(NodeType):
+    filename = "peptides.parquet"
+
+
 class SagepyRescoreConfig(NodeType):
     filename = "sagepy_rescore_config.toml"
 
@@ -426,6 +444,12 @@ def source_mkpmsms_binary(path: str):
 def source_sage_binary(path: str):
     sage_binary = output(SageBinary)
     return sage_binary
+
+
+@symlink_file
+def source_dump_peptides_binary(path: str):
+    dump_peptides_binary = output(DumpPeptidesBinary)
+    return dump_peptides_binary
 
 
 # Symlinked so edits to the installed-editable module invalidate sage_summarize.
@@ -812,6 +836,24 @@ def write_sage_config(text: str):
     return config
 
 
+@text_file
+def write_dump_peptides_config(text: str):
+    dump_peptides_config = output(DumpPeptidesConfig)
+    return dump_peptides_config
+
+
+@command(
+    "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} -o {peptides}"
+)
+def dump_peptides(
+    fasta: Fasta,
+    dump_peptides_config: DumpPeptidesConfig,
+    dump_peptides_binary: DumpPeptidesBinary,
+):
+    peptides = output(DumpedPeptides)
+    return peptides
+
+
 @command(
     "{sage_binary} --version"
     " && {sage_binary} -f {fasta} --annotate-matches --write-pin"
@@ -1122,6 +1164,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P, path="git/searchops/src/searchops/sage.py"
     )
     P.sage_binary = source_sage_binary(P, path="software/sage/devel_fixed/sage")
+    P.dump_peptides_binary = source_dump_peptides_binary(
+        P, path="software/sage/devel_fixed/dump_peptides"
+    )
 
     # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
@@ -1277,6 +1322,18 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     if "sage" in cfg:
         P.sage_config = write_sage_config(
             P, text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
+        )
+
+        # Derived straight from `cfg.sage.database` (not sliced out of the
+        # `sage_config` node above) so two job configs that only differ in
+        # unrelated sage settings (precursor_tol, report_psms, ...) but
+        # share the same digestion settings produce the same
+        # content-addressed node here, reusing one `dump_peptides` run.
+        P.dump_peptides_config = write_dump_peptides_config(
+            P, text=json.dumps(cfg.sage.database, sort_keys=True, indent=2) + "\n"
+        )
+        P.dumped_peptides = dump_peptides(
+            P, P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
 
         if "recalibration" in cfg:
