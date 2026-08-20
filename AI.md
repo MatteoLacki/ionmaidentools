@@ -41,6 +41,50 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   `patch_fragpipe_workflow`/`write_fragpipe_manifest`/`run_fragpipe`/`extract_fragpipe_log`/
   `summarize_fragpipe`).
 
+## Recalibration: three independently selectable modes (B.6, 2026-08-20)
+
+`ionmaiden_pipeline`'s `if "sage" in cfg:` branch has three modes, gated by
+two nested config keys so each is independently selectable for comparison
+testing — see `plans/better_sage_filtering.md`'s B.6 for the full design:
+
+1. **No recalibration** — no `[recalibration]` section at all. One SAGE
+   pass, `run_sage` directly on `search_mz_pmsms`/`search_precursors`.
+2. **mz recalibration alone** — `[recalibration]` present, no
+   `[recalibration.rt_iim]`. Existing two-pass mz correction
+   (`recalibrate_pmsms_mz`/`recalibrate_precursors`/`update_sage_config`),
+   unchanged since before B.6.
+3. **mz + RT + IIM recalibration** — `[recalibration.rt_iim]` also present.
+   Nests *inside* mode 2's branch (chains onto mode 2's already
+   mz-corrected outputs, doesn't duplicate them): `predict_rt_iim` (the
+   `--predicted-properties` cache, `git/featureprediction`) runs off the
+   same `filtered_sage_results_tsv` anchors the mz fits use, then
+   `correct_precursors_rt_iim` (`git/featureprediction`'s B.6 precursor
+   correction) chains onto `recalibrated_precursors`, then
+   `update_sage_config_rt_iim` chains onto `update_sage_config`'s output to
+   add `rt_tol_sec`/`mobility_tol`, then `run_sage_with_predicted_properties`
+   (a distinct rule from plain `run_sage`, adding `--predicted-properties`
+   — necroflow `@command` templates are static, can't conditionally add a
+   flag, and `predictions` would need to become an optional DAG input
+   either way; see `_mokapot_command` for the Python-callback alternative,
+   not used here).
+
+`final_mz_pmsms`/`final_precursors` are three-way selections feeding
+`convert_search_pmsms_to_mzml`/`convert_search_pmsms_to_mgf` — whichever
+mode ran, exported MGF/mzML headers match exactly what SAGE1 actually
+searched against. Before B.6, `final_precursors` didn't exist at all
+(exports always used raw `search_precursors`, even in mode 2) — a
+pre-existing gap this closes for mz too, not just RT/IIM.
+
+**Config derivation, not restatement** (see `git/featureprediction`'s
+`AI.md` for the numbers): `[recalibration.rt_iim]`'s `min_charge`/
+`max_charge` default to `cfg.sage.get("precursor_charge", (2, 4))` (SAGE's
+own compiled-in default) rather than crashing when `sage.precursor_charge`
+is unset, which real job configs often do. `tolerance_percentiles` is
+required explicitly in `[recalibration.rt_iim]` — deliberately *not*
+inherited from `cfg.recalibration`'s own (mz-scoped) value, since real
+values there (e.g. `[0, 100]`, no trimming) would be a bad default for RT
+specifically.
+
 ## Conventions to follow when editing this file
 
 - Design rationale, migration history, and "why this and not that" reasoning belongs
