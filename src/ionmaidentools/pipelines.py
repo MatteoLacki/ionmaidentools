@@ -1172,7 +1172,7 @@ def convert_search_pmsms_to_mzml(
 
 
 @command(
-    "venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} configs/mgf/default.toml {mgf}"
+    "venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} {config_path} {mgf}"
     " --threads_cnt {threads}"
     " && test -f {mgf}",
     threads=CORES,
@@ -1180,6 +1180,7 @@ def convert_search_pmsms_to_mzml(
 def convert_search_pmsms_to_mgf(
     pmsms: Pmsms,
     precursors: PreSageFilteredPrecursors,
+    config_path: str,
 ):
     mgf = output(TofFilteredMgf)
     return mgf
@@ -1265,11 +1266,13 @@ def convert_synthetic_pmsms_to_mzml(
 
 
 @command(
-    "venvs/common/bin/msms2mgf {pmsms} {precursors} configs/mgf/default.toml {mgf}"
+    "venvs/common/bin/msms2mgf {pmsms} {precursors} {config_path} {mgf}"
     " && test -f {mgf}"
 )
 def convert_synthetic_pmsms_to_mgf(
-    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors
+    pmsms: SyntheticPmsms,
+    precursors: SyntheticPrecursors,
+    config_path: str,
 ):
     mgf = output(SyntheticMgf)
     return mgf
@@ -1758,9 +1761,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.search_mzml, P.search_mzml_idmap = convert_search_pmsms_to_mzml(
         P, final_mz_pmsms, final_precursors,
     )
-    P.search_mgf = convert_search_pmsms_to_mgf(
-        P, final_mz_pmsms, final_precursors,
-    )
+    mgf_config_path = cfg.get("mgf", {}).get("config_path")
+    if mgf_config_path:
+        P.search_mgf = convert_search_pmsms_to_mgf(
+            P,
+            final_mz_pmsms,
+            final_precursors,
+            config_path=mgf_config_path,
+        )
 
     if "fragpipe" in cfg:
         P.fragpipe_workflow = source_fragpipe_workflow(
@@ -1789,7 +1797,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
        (`simulate_peptides_to_pmsms`).
     2. Convert that pmsms to a spectrum file: mzML (`convert_synthetic_pmsms_to_mzml`,
        via `git/pmsms2mzml`) or MGF (`convert_synthetic_pmsms_to_mgf`, via
-       `venvs/common/bin/msms2mgf` + `configs/mgf/default.toml`), picked by
+       `venvs/common/bin/msms2mgf` + `[mgf].config_path`), picked by
        cfg.output_format ("mzml", the default, or "mgf").
     3. mzML only: run FragPipe on it (reusing ionmaiden_pipeline's FragPipe rules
        verbatim -- source_fragpipe_workflow/generate_fragpipe_decoy_fasta/
@@ -1840,10 +1848,16 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
         P.fragpipe_log = extract_fragpipe_log(P, P.fragpipe_results_dir)
         P.fragpipe_summary = summarize_fragpipe(P, P.fragpipe_log)
     elif output_format == "mgf":
+        mgf_config_path = cfg.get("mgf", {}).get("config_path")
+        if not mgf_config_path:
+            raise ValueError(
+                "cfg.mgf.config_path is required when cfg.output_format == 'mgf'"
+            )
         P.synthetic_mgf = convert_synthetic_pmsms_to_mgf(
             P,
             P.synthetic_pmsms,
             P.synthetic_precursors,
+            config_path=mgf_config_path,
         )
     else:
         raise ValueError(

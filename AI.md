@@ -34,7 +34,11 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 
 - `ionmaiden_pipeline`: the real pipeline — Bruker `.d` → MS1 peak picking → quadrupole
   transmission → pseudo-MS/MS → SAGE search (+ optional recalibration pass, optional
-  FragPipe side-by-side comparison when the job config has a `[fragpipe]` section).
+  MGF export when the job config has an `[mgf]` section, optional FragPipe side-by-side
+  comparison when it has a `[fragpipe]` section). `[mgf].config_path` is passed as a
+  scalar input to `convert_search_pmsms_to_mgf`; its value therefore selects and
+  fingerprints the MGF flavour. Jobs without that key do not add `search_mgf` to the
+  pipeline.
 - `fragpipe_synthetic_pipeline`: FragPipe smoke test on Koina-simulated peptides from a
   FASTA (no Bruker `.d` input, no Sage) — reuses `ionmaiden_pipeline`'s FragPipe rules
   verbatim (`source_fragpipe_workflow`/`generate_fragpipe_decoy_fasta`/
@@ -74,6 +78,12 @@ mode ran, exported MGF/mzML headers match exactly what SAGE1 actually
 searched against. Before B.6, `final_precursors` didn't exist at all
 (exports always used raw `search_precursors`, even in mode 2) — a
 pre-existing gap this closes for mz too, not just RT/IIM.
+
+MGF export is optional: `convert_search_pmsms_to_mgf` is wired only when
+`[mgf].config_path` is present. The path is a scalar rule input rather than a typed
+artifact, so different paths produce different nodes; changing one config file in
+place does not invalidate an existing node. `fragpipe_synthetic_pipeline` likewise
+requires `[mgf].config_path` when `output_format = "mgf"`.
 
 **Config derivation, not restatement** (see `git/featureprediction`'s
 `AI.md` for the numbers): `[recalibration.rt_iim]`'s `min_charge`/
