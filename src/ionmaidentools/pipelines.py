@@ -56,6 +56,10 @@ class MmappetDataset(NodeType):
 
 
 # --- compute artifact node types ---
+class PipelineConfig(NodeType):
+    filename = "pipeline_config.toml"
+
+
 class Ms1Events(NodeType):
     filename = "events.ms1"
 
@@ -515,6 +519,12 @@ def source_sage_summarize_module(path: str):
 
 
 # --- compute rules ---
+@text_file
+def write_pipeline_config(text: str):
+    config = output(PipelineConfig)
+    return config
+
+
 @command(
     "venvs/common/bin/d2ms1 {tdf} {ms1}"
     " && test -f {ms1}/tof_row_starts.dat"
@@ -1316,6 +1326,7 @@ def summarize_fragpipe(log: FragpipeLog):
 def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     """Main IonMaiden pipeline."""
     cfg = DotDict.Recursive(config)
+    P.pipeline_config = write_pipeline_config(P, text=tomlkit.dumps(config))
 
     # Acquisition
     P.tdf = source_bruker_d(P, path=cfg.tdf_path)
@@ -1811,6 +1822,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     produced valid output from the same simulate_peptides_to_pmsms run.
     """
     cfg: DotDict = DotDict.Recursive(config)
+    P.pipeline_config = write_pipeline_config(P, text=tomlkit.dumps(config))
 
     # Peptide Simulation
     P.fasta = source_fasta(P, path=cfg.fasta_path)

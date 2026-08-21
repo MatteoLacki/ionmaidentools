@@ -24,6 +24,11 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 - Pipeline factories (`ionmaiden_pipeline(P, config)`, `fragpipe_synthetic_pipeline(P, config)`)
   wire rules together: `P.some_label = some_rule(P, parent_node, ..., scalar_kwarg=...)`.
   The first positional arg is always the `Pipeline` object `P`.
+- Both factories serialize their complete Necroflow-supplied config through
+  `write_pipeline_config` and publish it as requestable `P.pipeline_config`
+  (`pipeline_config.toml`). Necroflow strips metadata keys such as `.pipeline` and
+  `.requests`, resolves `.extends`, and expands grids before calling the factory, so
+  the file records the effective factory input.
 - Every rule shells out to a real installed/patched CLI directly — no bespoke Python
   wrapper CLIs. External tools live at fixed, pre-installed paths (`software/sage/devel_fixed`,
   `software/fragpipe/fragpipe-24.0`), same convention on both sides.
