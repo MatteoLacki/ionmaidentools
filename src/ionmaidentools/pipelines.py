@@ -425,41 +425,87 @@ class RecalibratedPpmPlot(Png):
     filename = "recalibrated_ppm.png"
 
 
-class Predictions(NodeType):
-    """sequence,charge -> rt,iim parquet from `git/featureprediction`'s
-    `predict_rt_iim` -- the `--predicted-properties` cache SAGE1 needs to
-    look up a candidate's predicted RT/IIM during search (it can't derive
-    these itself). See plans/better_sage_filtering.md's B.4/B.5."""
+class PredictedRt(NodeType):
+    """sequence -> rt parquet from `git/featureprediction`'s `predict_rt`
+    -- the `--predicted-rt` cache SAGE1 needs to look up a candidate's
+    predicted RT during search (it can't derive this itself). Independent
+    of `PredictedIim` -- see plans/rt_iim_independent_dimensions.md
+    (original combined design: plans/better_sage_filtering.md's B.4/B.5)."""
 
-    filename = "predictions.parquet"
+    filename = "predicted_rt.parquet"
+
+
+class PredictedIim(NodeType):
+    """sequence,charge -> iim parquet from `git/featureprediction`'s
+    `predict_iim` -- the `--predicted-iim` cache. Independent of
+    `PredictedRt`."""
+
+    filename = "predicted_iim.parquet"
+
+
+class NoPrediction(NodeType):
+    """Zero-cost sentinel standing in for `PredictedRt`/`PredictedIim`
+    (and `RtTolerance`/`MobilityTolerance`) when that dimension isn't
+    requested via `[recalibration.rt_iim].dimensions` -- necroflow requires
+    every `NodeType`-typed rule input to be a real DAG edge (no true-
+    optional input exists, and `NodeType`-typed inputs can't carry Python
+    defaults either), so `run_sage_with_predicted`/`update_sage_config_rt_iim`
+    always take both RT and IIM params; this stands in for whichever one
+    wasn't computed. A `@text_file` rule with zero `NodeType` inputs and a
+    fixed literal `text` default -- same fingerprint every time, so it
+    materializes once and every call site reuses the same node. See
+    plans/rt_iim_independent_dimensions.md."""
+
+    filename = "no_prediction.marker"
 
 
 class RtTolerance(NodeType):
     """rt_tol_sec tolerance JSON (`ValueTolSpline`-shaped, wrapped as
     `{"rt_tol_sec": {...}}` -- see `feature_prediction.tolerance
-    .write_value_tol_spline_json`). Produced by both `predict_rt_iim`
-    (pre-correction) and `correct_precursors_rt_iim` (post-correction,
-    tighter, the one actually fed to SAGE1 when RT/IIM correction runs)."""
+    .write_value_tol_spline_json`). Produced by both `predict_rt`
+    (pre-correction) and `correct_precursors_rt` (post-correction,
+    tighter, the one actually fed to SAGE1 when RT correction runs)."""
 
     filename = "rt_tolerance.json"
 
 
 class MobilityTolerance(NodeType):
-    """Same as `RtTolerance`, for `mobility_tol`/IIM."""
+    """Same as `RtTolerance`, for `mobility_tol`/IIM. Produced by both
+    `predict_iim` and `correct_precursors_iim`."""
 
     filename = "mobility_tolerance.json"
 
 
-class RtIimFitPlot(Png):
-    filename = "rt_iim_fit.png"
+class RtFitPlot(Png):
+    filename = "rt_fit.png"
+
+
+class IimFitPlot(Png):
+    filename = "iim_fit.png"
+
+
+class RtCorrectedPrecursors(RecalibratedPrecursors):
+    """RecalibratedPrecursors (mz-corrected) with `rt` also corrected by
+    `feature_prediction.precursor_correction.correct_precursors_rt` --
+    `inv_ion_mobility` untouched. Accepted wherever RecalibratedPrecursors
+    is, including `correct_precursors_iim`'s own `mz_corrected_precursors`
+    input when both dimensions are active (chained, not recombined -- see
+    plans/rt_iim_independent_dimensions.md)."""
+
+    filename = "rt_corrected_precursors.mmappet"
 
 
 class RtIimCorrectedPrecursors(RecalibratedPrecursors):
-    """RecalibratedPrecursors (mz-corrected) with `rt`/`inv_ion_mobility`
-    also corrected by `feature_prediction.precursor_correction
-    .correct_precursors_rt_iim` -- accepted wherever RecalibratedPrecursors
-    (or, transitively, TofFilteredPrecursors/PreSageFilteredPrecursors) is,
-    e.g. run_sage's final-pass `precursors` input in mode 3. See
+    """RecalibratedPrecursors (mz-corrected, optionally already rt-corrected
+    via `RtCorrectedPrecursors` when both dimensions are active) with
+    `inv_ion_mobility` also corrected by
+    `feature_prediction.precursor_correction.correct_precursors_iim` --
+    accepted wherever RecalibratedPrecursors (or, transitively,
+    TofFilteredPrecursors/PreSageFilteredPrecursors) is, e.g. run_sage's
+    final-pass `precursors` input in mode 3. Name kept from the pre-split
+    design (the "final, however-corrected precursors" type) -- whether
+    `rt` was actually corrected too depends on which precursors table was
+    fed in as `mz_corrected_precursors`, not on this type alone. See
     plans/better_sage_filtering.md's B.6."""
 
     filename = "rt_iim_corrected_precursors.mmappet"
@@ -476,8 +522,12 @@ class PrecursorCorrectionIimModels(NodeType):
     filename = "precursor_correction_iim_models"
 
 
-class PrecursorCorrectionFitPlot(Png):
-    filename = "precursor_correction_fit_plot.png"
+class PrecursorCorrectionRtFitPlot(Png):
+    filename = "precursor_correction_rt_fit_plot.png"
+
+
+class PrecursorCorrectionIimFitPlot(Png):
+    filename = "precursor_correction_iim_fit_plot.png"
 
 
 # --- source rules (symlink pre-existing files/dirs, no validation) ---
@@ -942,33 +992,77 @@ def run_sage(
     return results_json, results_pin, results_tsv, matched_fragments
 
 
-@command(
-    "{sage_binary} --version"
-    " && {sage_binary} -f {fasta} --annotate-matches --write-pin"
-    " --output_directory {workdir} --pmsms {pmsms} --precursors {precursors}"
-    " --predicted-properties {predictions}"
-    " {sage_config}"
-    " && test -f {results_json} && test -f {results_pin}"
-    " && test -f {results_tsv} && test -f {matched_fragments}",
-    threads=CORES,
-)
-def run_sage_with_predicted_properties(
+@text_file
+def write_no_prediction_marker(text: str):
+    marker = output(NoPrediction)
+    return marker
+
+
+_NO_PREDICTION_TEXT = "no prediction requested for this dimension\n"
+
+
+def _run_sage_with_predicted_command(args: CommandArgs) -> str:
+    """Python command callback, not a static template -- lets
+    `--predicted-rt`/`--predicted-iim` be added independently based on
+    `args.config.dimensions` (RT/IIM independently optional). `predicted_rt`/
+    `predicted_iim` are always real DAG edges (necroflow requires it --
+    no true-optional `NodeType` input exists) but resolve to the free
+    `NoPrediction` sentinel, not a real prediction file, when their
+    dimension is excluded; the decision of which `--predicted-*` flags to
+    emit is driven by the scalar `dimensions` config, not by inspecting
+    which type actually resolved (`args.inputs.*` only exposes resolved
+    `Path`s, no type info -- see `contexts.CommandArgs`). See
+    plans/rt_iim_independent_dimensions.md.
+    """
+    sage_binary = shlex.quote(str(args.inputs.sage_binary))
+    fasta = shlex.quote(str(args.inputs.fasta))
+    pmsms = shlex.quote(str(args.inputs.pmsms))
+    precursors = shlex.quote(str(args.inputs.precursors))
+    sage_config = shlex.quote(str(args.inputs.sage_config))
+    workdir = shlex.quote(str(args.workdir))
+    results_json = shlex.quote(str(args.outputs.results_json))
+    results_pin = shlex.quote(str(args.outputs.results_pin))
+    results_tsv = shlex.quote(str(args.outputs.results_tsv))
+    matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
+
+    dimensions = set(args.config.dimensions)
+    flags = ""
+    if "rt" in dimensions:
+        flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
+    if "iim" in dimensions:
+        flags += f" --predicted-iim {shlex.quote(str(args.inputs.predicted_iim))}"
+
+    return (
+        f"{sage_binary} --version && {sage_binary} -f {fasta}"
+        f" --annotate-matches --write-pin --output_directory {workdir}"
+        f" --pmsms {pmsms} --precursors {precursors}{flags} {sage_config}"
+        f" && test -f {results_json} && test -f {results_pin}"
+        f" && test -f {results_tsv} && test -f {matched_fragments}"
+    )
+
+
+@command(_run_sage_with_predicted_command, threads=CORES)
+def run_sage_with_predicted(
     pmsms: Pmsms,
     precursors: PreSageFilteredPrecursors,
     fasta: Fasta,
     sage_config: SageConfig,
     sage_binary: SageBinary,
-    predictions: Predictions,
+    predicted_rt: PredictedRt | NoPrediction,
+    predicted_iim: PredictedIim | NoPrediction,
+    dimensions: tuple[str, ...],
 ):
-    """Same as `run_sage`, plus `--predicted-properties` -- a distinct rule
-    rather than a conditional flag on `run_sage` itself (necroflow's
-    `@command` templates are static; see `_mokapot_command` below for the
-    Python-callback alternative, not used here since `predictions` would
-    need to become an optional DAG input either way). Only used for mode 3
-    (mz+RT+IIM recalibration)'s final pass -- `sage_config` must already
-    have `rt_tol_sec`/`mobility_tol` set (`update_sage_config_rt_iim`),
-    same requirement `Input::build()` enforces Rust-side. See
-    plans/better_sage_filtering.md's B.4-B.6.
+    """Same as `run_sage`, plus `--predicted-rt`/`--predicted-iim`, each
+    independently included based on `dimensions` -- a distinct rule rather
+    than a conditional flag on `run_sage` itself, since `run_sage` is also
+    pass-1's rule (unrelated to predictions, shouldn't carry sentinel-node
+    wiring every call site would otherwise need). Only used for mode 3
+    (mz + RT and/or IIM recalibration)'s final pass -- `sage_config` must
+    already have `rt_tol_sec`/`mobility_tol` set for whichever dimensions
+    are active (`update_sage_config_rt_iim`), same requirement
+    `Input::build()` enforces Rust-side. See
+    plans/better_sage_filtering.md's B.4-B.6 and
+    plans/rt_iim_independent_dimensions.md.
     """
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
@@ -978,12 +1072,30 @@ def run_sage_with_predicted_properties(
 
 
 @command(
-    "venvs/featureprediction/bin/feature-prediction-generate"
-    " {dumped_peptides} {sage_results_tsv} {predictions} {rt_tolerance} {mobility_tolerance} {plot}"
+    "venvs/featureprediction/bin/feature-prediction-generate-rt"
+    " {dumped_peptides} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
+    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
+)
+def predict_rt(
+    dumped_peptides: DumpedPeptides,
+    sage_results_tsv: SageResultsTsv,
+    tolerance_lo: int | float,
+    tolerance_hi: int | float,
+    fdr: int | float,
+):
+    predicted_rt = output(PredictedRt)
+    rt_tolerance = output(RtTolerance)
+    plot = output(RtFitPlot)
+    return predicted_rt, rt_tolerance, plot
+
+
+@command(
+    "venvs/featureprediction/bin/feature-prediction-generate-iim"
+    " {dumped_peptides} {sage_results_tsv} {predicted_iim} {mobility_tolerance} {plot}"
     " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
 )
-def predict_rt_iim(
+def predict_iim(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
     min_charge: int,
@@ -992,57 +1104,111 @@ def predict_rt_iim(
     tolerance_hi: int | float,
     fdr: int | float,
 ):
-    predictions = output(Predictions)
-    rt_tolerance = output(RtTolerance)
+    predicted_iim = output(PredictedIim)
     mobility_tolerance = output(MobilityTolerance)
-    plot = output(RtIimFitPlot)
-    return predictions, rt_tolerance, mobility_tolerance, plot
+    plot = output(IimFitPlot)
+    return predicted_iim, mobility_tolerance, plot
 
 
 @command(
-    "venvs/featureprediction/bin/feature-prediction-correct-precursors"
-    " {sage_results_tsv} {predictions} {mz_corrected_precursors}"
-    " {output_precursors} {rt_tolerance} {mobility_tolerance}"
-    " {rt_model} {iim_models} {plot}"
+    "venvs/featureprediction/bin/feature-prediction-correct-precursors-rt"
+    " {sage_results_tsv} {predicted_rt} {mz_corrected_precursors}"
+    " {output_precursors} {rt_tolerance} {rt_model} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
 )
-def correct_precursors_rt_iim(
+def correct_precursors_rt(
     sage_results_tsv: SageResultsTsv,
-    predictions: Predictions,
+    predicted_rt: PredictedRt,
     mz_corrected_precursors: RecalibratedPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     fdr: int | float,
 ):
-    output_precursors = output(RtIimCorrectedPrecursors)
+    output_precursors = output(RtCorrectedPrecursors)
     rt_tolerance = output(RtTolerance)
-    mobility_tolerance = output(MobilityTolerance)
     rt_model = output(PrecursorCorrectionRtModel)
-    iim_models = output(PrecursorCorrectionIimModels)
-    plot = output(PrecursorCorrectionFitPlot)
-    return output_precursors, rt_tolerance, mobility_tolerance, rt_model, iim_models, plot
+    plot = output(PrecursorCorrectionRtFitPlot)
+    return output_precursors, rt_tolerance, rt_model, plot
 
 
 @command(
-    ".venv/bin/python -m necroflow.tools.config_set"
-    " {sage_config} {workdir}/rt_tol_updated.json"
-    " --target rt_tol_sec --source {rt_tolerance} --source-field rt_tol_sec"
-    " && .venv/bin/python -m necroflow.tools.config_set"
-    " {workdir}/rt_tol_updated.json {recalibrated_sage_config}"
-    " --target mobility_tol --source {mobility_tolerance} --source-field mobility_tol"
+    "venvs/featureprediction/bin/feature-prediction-correct-precursors-iim"
+    " {sage_results_tsv} {predicted_iim} {mz_corrected_precursors}"
+    " {output_precursors} {mobility_tolerance} {iim_models} {plot}"
+    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
 )
+def correct_precursors_iim(
+    sage_results_tsv: SageResultsTsv,
+    predicted_iim: PredictedIim,
+    mz_corrected_precursors: RecalibratedPrecursors,
+    tolerance_lo: int | float,
+    tolerance_hi: int | float,
+    fdr: int | float,
+):
+    """`mz_corrected_precursors` accepts a plain `RecalibratedPrecursors`
+    (IIM-only mode) or an `RtCorrectedPrecursors` (both dimensions active,
+    chained -- `RtCorrectedPrecursors` is a `RecalibratedPrecursors`
+    subclass, satisfies this contract either way). See
+    plans/rt_iim_independent_dimensions.md."""
+    output_precursors = output(RtIimCorrectedPrecursors)
+    mobility_tolerance = output(MobilityTolerance)
+    iim_models = output(PrecursorCorrectionIimModels)
+    plot = output(PrecursorCorrectionIimFitPlot)
+    return output_precursors, mobility_tolerance, iim_models, plot
+
+
+def _update_sage_config_rt_iim_command(args: CommandArgs) -> str:
+    """Python command callback -- chains 0, 1, or 2 `config_set` calls
+    based on `args.config.dimensions` (RT/IIM independently optional),
+    same reasoning as `_run_sage_with_predicted_command`: `rt_tolerance`/
+    `mobility_tolerance` are always real DAG edges (resolve to the
+    `NoPrediction` sentinel when inactive), but only the active
+    dimension's `config_set` call actually runs -- decided by the scalar
+    `dimensions` config, never by inspecting file content. In practice
+    `dimensions` is never empty here (the pipeline factory only calls this
+    rule inside `if "rt_iim" in cfg.recalibration:`, which always sets at
+    least one dimension), but a plain copy-through is a safe fallback.
+    """
+    sage_config = shlex.quote(str(args.inputs.sage_config))
+    recalibrated_sage_config = shlex.quote(str(args.outputs.recalibrated_sage_config))
+    dimensions = set(args.config.dimensions)
+
+    current = sage_config
+    steps = []
+    if "rt" in dimensions:
+        rt_tolerance = shlex.quote(str(args.inputs.rt_tolerance))
+        next_out = shlex.quote(str(args.workdir / "rt_tol_updated.json"))
+        steps.append(
+            f".venv/bin/python -m necroflow.tools.config_set {current} {next_out}"
+            f" --target rt_tol_sec --source {rt_tolerance} --source-field rt_tol_sec"
+        )
+        current = next_out
+    if "iim" in dimensions:
+        mobility_tolerance = shlex.quote(str(args.inputs.mobility_tolerance))
+        steps.append(
+            f".venv/bin/python -m necroflow.tools.config_set {current} {recalibrated_sage_config}"
+            f" --target mobility_tol --source {mobility_tolerance} --source-field mobility_tol"
+        )
+        current = recalibrated_sage_config
+    if current != recalibrated_sage_config:
+        steps.append(f"cp {current} {recalibrated_sage_config}")
+    return " && ".join(steps)
+
+
+@command(_update_sage_config_rt_iim_command)
 def update_sage_config_rt_iim(
     sage_config: SageConfig,
-    rt_tolerance: RtTolerance,
-    mobility_tolerance: MobilityTolerance,
+    rt_tolerance: RtTolerance | NoPrediction,
+    mobility_tolerance: MobilityTolerance | NoPrediction,
+    dimensions: tuple[str, ...],
 ):
     """Chains onto `update_sage_config`'s output (mz's `precursor_tol`/
     `fragment_tol` already patched) -- `sage_config` here is that rule's
     `recalibrated_sage_config`, not the plain `write_sage_config` output.
-    `predicted_properties` itself is *not* set here: like `--pmsms`/
-    `--precursors`/`-f {fasta}`, it's a path-valued override passed
-    directly as a CLI flag (`run_sage_with_predicted_properties`), not
-    embedded into the config JSON via `config_set`."""
+    `--predicted-rt`/`--predicted-iim` themselves are *not* set here: like
+    `--pmsms`/`--precursors`/`-f {fasta}`, they're path-valued overrides
+    passed directly as CLI flags (`run_sage_with_predicted`), not embedded
+    into the config JSON via `config_set`."""
     recalibrated_sage_config = output(SageConfig)
     return recalibrated_sage_config
 
@@ -1597,58 +1763,125 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 rt_iim_tolerance_lo, rt_iim_tolerance_hi = cfg.recalibration.rt_iim[
                     "tolerance_percentiles"
                 ]
-                (
-                    P.predictions,
-                    P.rt_tolerance,
-                    P.mobility_tolerance,
-                    P.rt_iim_fit_plot,
-                ) = predict_rt_iim(
-                    P,
-                    P.dumped_peptides,
-                    P.filtered_sage_results_tsv,
-                    min_charge=rt_iim_min_charge,
-                    max_charge=rt_iim_max_charge,
-                    tolerance_lo=rt_iim_tolerance_lo,
-                    tolerance_hi=rt_iim_tolerance_hi,
-                    fdr=cfg.sage_summarize.fdr,
+                # RT and IIM candidate filtering are independently
+                # selectable -- default both (backward-compatible with
+                # every existing job config, which never set this key).
+                # See plans/rt_iim_independent_dimensions.md.
+                dimensions = tuple(
+                    cfg.recalibration.rt_iim.get("dimensions", ["rt", "iim"])
                 )
-                (
-                    P.rt_iim_corrected_precursors,
-                    P.precursor_correction_rt_tolerance,
-                    P.precursor_correction_mobility_tolerance,
-                    P.precursor_correction_rt_model,
-                    P.precursor_correction_iim_models,
-                    P.precursor_correction_fit_plot,
-                ) = correct_precursors_rt_iim(
-                    P,
-                    P.filtered_sage_results_tsv,
-                    P.predictions,
-                    P.recalibrated_precursors,
-                    tolerance_lo=rt_iim_tolerance_lo,
-                    tolerance_hi=rt_iim_tolerance_hi,
-                    fdr=cfg.sage_summarize.fdr,
+
+                if "rt" in dimensions:
+                    P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
+                        P,
+                        P.dumped_peptides,
+                        P.filtered_sage_results_tsv,
+                        tolerance_lo=rt_iim_tolerance_lo,
+                        tolerance_hi=rt_iim_tolerance_hi,
+                        fdr=cfg.sage_summarize.fdr,
+                    )
+                else:
+                    P.predicted_rt = write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+
+                if "iim" in dimensions:
+                    P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
+                        P,
+                        P.dumped_peptides,
+                        P.filtered_sage_results_tsv,
+                        min_charge=rt_iim_min_charge,
+                        max_charge=rt_iim_max_charge,
+                        tolerance_lo=rt_iim_tolerance_lo,
+                        tolerance_hi=rt_iim_tolerance_hi,
+                        fdr=cfg.sage_summarize.fdr,
+                    )
+                else:
+                    P.predicted_iim = write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+
+                # Chained, not recombined: correct_precursors_iim's
+                # mz_corrected_precursors input becomes correct_precursors_rt's
+                # own output when both dimensions are active, so a single
+                # final precursors table ends up with both corrections
+                # applied (RtCorrectedPrecursors is a RecalibratedPrecursors
+                # subclass, satisfies either call site's contract).
+                precursor_correction_rt_tolerance = None
+                precursor_correction_mobility_tolerance = None
+                precursors_for_iim_correction = P.recalibrated_precursors
+                final_precursors = P.recalibrated_precursors
+
+                if "rt" in dimensions:
+                    (
+                        P.rt_corrected_precursors,
+                        precursor_correction_rt_tolerance,
+                        P.precursor_correction_rt_model,
+                        P.precursor_correction_rt_fit_plot,
+                    ) = correct_precursors_rt(
+                        P,
+                        P.filtered_sage_results_tsv,
+                        P.predicted_rt,
+                        P.recalibrated_precursors,
+                        tolerance_lo=rt_iim_tolerance_lo,
+                        tolerance_hi=rt_iim_tolerance_hi,
+                        fdr=cfg.sage_summarize.fdr,
+                    )
+                    precursors_for_iim_correction = P.rt_corrected_precursors
+                    final_precursors = P.rt_corrected_precursors
+
+                if "iim" in dimensions:
+                    (
+                        P.rt_iim_corrected_precursors,
+                        precursor_correction_mobility_tolerance,
+                        P.precursor_correction_iim_models,
+                        P.precursor_correction_iim_fit_plot,
+                    ) = correct_precursors_iim(
+                        P,
+                        P.filtered_sage_results_tsv,
+                        P.predicted_iim,
+                        precursors_for_iim_correction,
+                        tolerance_lo=rt_iim_tolerance_lo,
+                        tolerance_hi=rt_iim_tolerance_hi,
+                        fdr=cfg.sage_summarize.fdr,
+                    )
+                    final_precursors = P.rt_iim_corrected_precursors
+
+                # update_sage_config_rt_iim needs a real RtTolerance/
+                # MobilityTolerance for whichever dimension's correction
+                # ran (tighter, post-correction fit) -- the sentinel for
+                # whichever dimension is inactive, matching
+                # predicted_rt/predicted_iim's own fallback above.
+                P.precursor_correction_rt_tolerance = (
+                    precursor_correction_rt_tolerance
+                    if precursor_correction_rt_tolerance is not None
+                    else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
                 )
+                P.precursor_correction_mobility_tolerance = (
+                    precursor_correction_mobility_tolerance
+                    if precursor_correction_mobility_tolerance is not None
+                    else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+                )
+
                 P.recalibrated_sage_config_rt_iim = update_sage_config_rt_iim(
                     P,
                     P.recalibrated_sage_config,
                     P.precursor_correction_rt_tolerance,
                     P.precursor_correction_mobility_tolerance,
+                    dimensions=dimensions,
                 )
                 (
                     P.sage_results_json,
                     P.sage_results_pin,
                     P.sage_results_tsv,
                     P.sage_matched_fragments,
-                ) = run_sage_with_predicted_properties(
+                ) = run_sage_with_predicted(
                     P,
                     P.recalibrated_mz_pmsms,
-                    P.rt_iim_corrected_precursors,
+                    final_precursors,
                     P.fasta,
                     P.recalibrated_sage_config_rt_iim,
                     P.sage_binary,
-                    P.predictions,
+                    P.predicted_rt,
+                    P.predicted_iim,
+                    dimensions=dimensions,
                 )
-                final_precursors = P.rt_iim_corrected_precursors
             else:
                 (
                     P.sage_results_json,
