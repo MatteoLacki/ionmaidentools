@@ -446,15 +446,22 @@ class PredictedIim(NodeType):
 class NoPrediction(NodeType):
     """Zero-cost sentinel standing in for `PredictedRt`/`PredictedIim`
     (and `RtTolerance`/`MobilityTolerance`) when that dimension isn't
-    requested via `[recalibration.rt_iim].dimensions` -- necroflow requires
-    every `NodeType`-typed rule input to be a real DAG edge (no true-
-    optional input exists, and `NodeType`-typed inputs can't carry Python
-    defaults either), so `run_sage_with_predicted`/`update_sage_config_rt_iim`
-    always take both RT and IIM params; this stands in for whichever one
-    wasn't computed. A `@text_file` rule with zero `NodeType` inputs and a
-    fixed literal `text` default -- same fingerprint every time, so it
-    materializes once and every call site reuses the same node. See
-    plans/rt_iim_independent_dimensions.md."""
+    active (`[recalibration.rt]`/`[recalibration.iim]` absent, 2026-08-25 --
+    see the pipeline factory) -- necroflow requires every `NodeType`-typed
+    rule input to be a real DAG edge (no true-optional input exists, and
+    `NodeType`-typed inputs can't carry Python defaults either), so
+    `run_sage_with_predicted`/`update_sage_config_rt_iim` always take both
+    RT and IIM params; this stands in for whichever one wasn't computed.
+    (necroflow *does* support skipping a rule entirely via plain `if/else`
+    branching in the pipeline factory -- see its `docs/rules.md`'s
+    "Conditional pipelines" -- but here RT/IIM are independently optional,
+    so properly avoiding this sentinel would mean up to 3 separate
+    `run_sage_with_predicted`/`update_sage_config_rt_iim` rule variants
+    instead of one with a Python-callback command; not done yet, see
+    plans/rt_iim_independent_dimensions.md.) A `@text_file` rule with zero
+    `NodeType` inputs and a fixed literal `text` default -- same
+    fingerprint every time, so it materializes once and every call site
+    reuses the same node."""
 
     filename = "no_prediction.marker"
 
@@ -1206,8 +1213,9 @@ def _update_sage_config_rt_iim_command(args: CommandArgs) -> str:
     dimension's `config_set` call actually runs -- decided by the scalar
     `dimensions` config, never by inspecting file content. In practice
     `dimensions` is never empty here (the pipeline factory only calls this
-    rule inside `if "rt_iim" in cfg.recalibration:`, which always sets at
-    least one dimension), but a plain copy-through is a safe fallback.
+    rule inside `if "rt" in cfg.recalibration or "iim" in cfg.recalibration:`,
+    which always sets at least one dimension), but a plain copy-through is
+    a safe fallback.
     """
     sage_config = shlex.quote(str(args.inputs.sage_config))
     recalibrated_sage_config = shlex.quote(str(args.outputs.recalibrated_sage_config))
@@ -1774,10 +1782,23 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             )
 
             # Mode 3 (mz + RT + IIM) nests inside mode 2 (mz alone) since it
-            # chains onto mz's already-corrected outputs -- gated by its own
-            # key so mode 2 stays the default when "rt_iim" is absent, not
-            # silently upgraded. See plans/better_sage_filtering.md's B.6.
-            if "rt_iim" in cfg.recalibration:
+            # chains onto mz's already-corrected outputs -- gated by RT/IIM
+            # table presence so mode 2 stays the default when neither is
+            # configured, not silently upgraded. See
+            # plans/better_sage_filtering.md's B.6.
+            #
+            # RT and IIM are independently active based on whether their own
+            # table exists (2026-08-25) -- mirrors mz's own existing pattern
+            # (`"recalibration" in cfg` means mz correction is on, no
+            # separate flag needed). No more `[recalibration.rt_iim]`
+            # umbrella table or `dimensions` key: that config shape read as
+            # "both RT and IIM" by name while actually meaning "the RT/IIM
+            # subsystem in general," which was confusing (its `dimensions`
+            # sub-list is exactly redundant with per-dimension table
+            # presence -- carrying the same fact in two places). See
+            # plans/rt_iim_independent_dimensions.md for the original design
+            # this simplifies.
+            if "rt" in cfg.recalibration or "iim" in cfg.recalibration:
                 # min_charge/max_charge: explicit `[recalibration.iim]`
                 # override if given, else mirror whatever charge range the
                 # SAGE run this feeds will itself search -- `cfg.sage`'s own
@@ -1789,18 +1810,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 # per-precursor charges instead -- this must not crash on
                 # that, and should match SAGE's real default when it does.
                 default_precursor_charge = cfg.sage.get("precursor_charge", (2, 4))
-                # RT and IIM candidate filtering are independently
-                # selectable -- default both (backward-compatible with
-                # every existing job config, which never set this key).
-                # `dimensions` is the only key `[recalibration.rt_iim]`
-                # still carries (2026-08-25) -- percentiles/method/charge
-                # range moved into their own per-dimension tables below,
-                # since they're only meaningful (and only required to be
-                # present) for a dimension that's actually active. See
-                # plans/rt_iim_independent_dimensions.md.
-                dimensions = tuple(
-                    cfg.recalibration.rt_iim.get("dimensions", ["rt", "iim"])
-                )
+                # Downstream rules (run_sage_with_predicted,
+                # update_sage_config_rt_iim) still take `dimensions` as a
+                # scalar tuple -- computed here from table presence, not
+                # read from config.
+                dimensions = tuple(d for d in ("rt", "iim") if d in cfg.recalibration)
 
                 # tolerance_percentiles/tolerance_method: required explicitly
                 # in `[recalibration.rt]`/`[recalibration.iim]` (separate

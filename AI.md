@@ -50,32 +50,58 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   `patch_fragpipe_workflow`/`write_fragpipe_manifest`/`run_fragpipe`/`extract_fragpipe_log`/
   `summarize_fragpipe`).
 
-## Recalibration: three independently selectable modes (B.6, 2026-08-20)
+## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 
-`ionmaiden_pipeline`'s `if "sage" in cfg:` branch has three modes, gated by
-two nested config keys so each is independently selectable for comparison
-testing — see `plans/better_sage_filtering.md`'s B.6 for the full design:
+`ionmaiden_pipeline`'s `if "sage" in cfg:` branch has three modes. Each of
+mz/RT/IIM gates on whether its own config table exists — no separate
+"is this feature on" flag, table presence *is* the flag (RT/IIM used to
+share one `[recalibration.rt_iim]` umbrella table with a `dimensions`
+sub-list; removed 2026-08-25, see below) — see
+`plans/better_sage_filtering.md`'s B.6 for the full original design and
+`plans/rt_iim_independent_dimensions.md` for the RT/IIM independence split:
 
 1. **No recalibration** — no `[recalibration]` section at all. One SAGE
    pass, `run_sage` directly on `search_mz_pmsms`/`search_precursors`.
-2. **mz recalibration alone** — `[recalibration]` present, no
-   `[recalibration.rt_iim]`. Existing two-pass mz correction
-   (`recalibrate_pmsms_mz`/`recalibrate_precursors`/`update_sage_config`),
-   unchanged since before B.6.
-3. **mz + RT + IIM recalibration** — `[recalibration.rt_iim]` also present.
+2. **mz recalibration alone** — `[recalibration]` present, neither
+   `[recalibration.rt]` nor `[recalibration.iim]`. Existing two-pass mz
+   correction (`recalibrate_pmsms_mz`/`recalibrate_precursors`/
+   `update_sage_config`), unchanged since before B.6.
+3. **mz + RT and/or IIM recalibration** — `[recalibration.rt]` and/or
+   `[recalibration.iim]` also present (`"rt" in cfg.recalibration or "iim"
+   in cfg.recalibration"`, not a `[recalibration.rt_iim]` gate anymore).
    Nests *inside* mode 2's branch (chains onto mode 2's already
-   mz-corrected outputs, doesn't duplicate them): `predict_rt_iim` (the
-   `--predicted-properties` cache, `git/featureprediction`) runs off the
-   same `filtered_sage_results_tsv` anchors the mz fits use, then
-   `correct_precursors_rt_iim` (`git/featureprediction`'s B.6 precursor
-   correction) chains onto `recalibrated_precursors`, then
-   `update_sage_config_rt_iim` chains onto `update_sage_config`'s output to
-   add `rt_tol_sec`/`mobility_tol`, then `run_sage_with_predicted_properties`
-   (a distinct rule from plain `run_sage`, adding `--predicted-properties`
-   — necroflow `@command` templates are static, can't conditionally add a
-   flag, and `predictions` would need to become an optional DAG input
-   either way; see `_mokapot_command` for the Python-callback alternative,
-   not used here).
+   mz-corrected outputs, doesn't duplicate them): `predict_rt`/`predict_iim`
+   (`git/featureprediction`, independently called per active dimension) run
+   off the same `filtered_sage_results_tsv` anchors the mz fits use, then
+   `correct_precursors_rt`/`correct_precursors_iim` chain onto
+   `recalibrated_precursors`, then `update_sage_config_rt_iim` chains onto
+   `update_sage_config`'s output to add `rt_tol_sec`/`mobility_tol` for
+   whichever dimensions are active, then `run_sage_with_predicted` (a
+   distinct rule from plain `run_sage`, adding `--predicted-rt`/
+   `--predicted-iim` — necroflow `@command` templates are static, can't
+   conditionally add a flag, so this uses a Python command callback
+   instead, see `_run_sage_with_predicted_command`).
+
+**Why table presence, not a separate `dimensions` list (2026-08-25):**
+`[recalibration.rt_iim].dimensions` used to be the sole way to select which
+of RT/IIM were active, but by the time `tolerance_percentiles`/
+`tolerance_method`/`min_charge`/`max_charge`/`server_url` had all moved into
+their own `[recalibration.rt]`/`[recalibration.iim]` tables (the entries
+just below), `dimensions` was carrying the exact same fact a second time —
+and the name `[recalibration.rt_iim]` read as "both RT and IIM" while
+actually meaning "the RT/IIM subsystem in general," which was a real
+footgun reading a config cold. `dimensions` is now computed in the pipeline
+factory (`tuple(d for d in ("rt", "iim") if d in cfg.recalibration)`), not
+read from config; `[recalibration.rt_iim]` no longer exists as a concept.
+`NoPrediction`/the `run_sage_with_predicted`/`update_sage_config_rt_iim`
+Python-callback-command pattern is unaffected by this — that part remains
+necessary because necroflow's `@command` templates are static and RT/IIM
+are independently optional (4 real combinations), even though necroflow
+*does* support skipping a rule/node entirely via plain `if/else` branching
+in the factory (its `docs/rules.md`'s "Conditional pipelines") — properly
+removing the sentinel would mean splitting `run_sage_with_predicted`/
+`update_sage_config_rt_iim` into up to 3 static-template rule variants
+instead; not done, deliberately deferred as a larger, separate change.
 
 `final_mz_pmsms`/`final_precursors` are three-way selections feeding
 `convert_search_pmsms_to_mzml`/`convert_search_pmsms_to_mgf` — whichever
