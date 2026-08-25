@@ -1000,6 +1000,27 @@ def write_no_prediction_marker(text: str):
 
 _NO_PREDICTION_TEXT = "no prediction requested for this dimension\n"
 
+# Duplicated from `git/featureprediction`'s `koina_client.DEFAULT_SERVER_URL`
+# -- can't import across venvs (this repo shells out to a separate
+# `venvs/featureprediction` install, doesn't depend on that package
+# directly), same reasoning as `default_precursor_charge` duplicating
+# SAGE's own compiled-in (2, 4) default just above.
+_DEFAULT_KOINA_SERVER_URL = "192.168.1.222:8500"
+
+
+def _server_url_arg(value: str | list[str] | None) -> str:
+    """`[recalibration.rt]`/`[recalibration.iim]`'s `server_url` (a plain
+    string or a TOML array -- either is valid config shape) into the single
+    comma-separated string `feature-prediction-generate-{rt,iim}`'s
+    `--server-url` flag expects (it splits on comma back into a priority
+    list -- ip0 tried first, falling back to ip1 etc. on failure). Defaults
+    to `_DEFAULT_KOINA_SERVER_URL` when unset."""
+    if value is None:
+        return _DEFAULT_KOINA_SERVER_URL
+    if isinstance(value, str):
+        return value
+    return ",".join(value)
+
 
 def _run_sage_with_predicted_command(args: CommandArgs) -> str:
     """Python command callback, not a static template -- lets
@@ -1074,13 +1095,16 @@ def run_sage_with_predicted(
 @command(
     "venvs/featureprediction/bin/feature-prediction-generate-rt"
     " {dumped_peptides} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
-    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
+    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
+    " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
 )
 def predict_rt(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
+    tolerance_method: str,
+    server_url: str,
     fdr: int | float,
 ):
     predicted_rt = output(PredictedRt)
@@ -1093,7 +1117,8 @@ def predict_rt(
     "venvs/featureprediction/bin/feature-prediction-generate-iim"
     " {dumped_peptides} {sage_results_tsv} {predicted_iim} {mobility_tolerance} {plot}"
     " --min-charge {min_charge} --max-charge {max_charge}"
-    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
+    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
+    " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
 )
 def predict_iim(
     dumped_peptides: DumpedPeptides,
@@ -1102,6 +1127,8 @@ def predict_iim(
     max_charge: int,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
+    tolerance_method: str,
+    server_url: str,
     fdr: int | float,
 ):
     predicted_iim = output(PredictedIim)
@@ -1114,7 +1141,8 @@ def predict_iim(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-rt"
     " {sage_results_tsv} {predicted_rt} {mz_corrected_precursors}"
     " {output_precursors} {rt_tolerance} {rt_model} {plot}"
-    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
+    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
+    " --tolerance-method {tolerance_method} --fdr {fdr}"
 )
 def correct_precursors_rt(
     sage_results_tsv: SageResultsTsv,
@@ -1122,6 +1150,7 @@ def correct_precursors_rt(
     mz_corrected_precursors: RecalibratedPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
+    tolerance_method: str,
     fdr: int | float,
 ):
     output_precursors = output(RtCorrectedPrecursors)
@@ -1135,7 +1164,8 @@ def correct_precursors_rt(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-iim"
     " {sage_results_tsv} {predicted_iim} {mz_corrected_precursors}"
     " {output_precursors} {mobility_tolerance} {iim_models} {plot}"
-    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi} --fdr {fdr}"
+    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
+    " --tolerance-method {tolerance_method} --fdr {fdr}"
 )
 def correct_precursors_iim(
     sage_results_tsv: SageResultsTsv,
@@ -1143,6 +1173,7 @@ def correct_precursors_iim(
     mz_corrected_precursors: RecalibratedPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
+    tolerance_method: str,
     fdr: int | float,
 ):
     """`mz_corrected_precursors` accepts a plain `RecalibratedPrecursors`
@@ -1738,7 +1769,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             # key so mode 2 stays the default when "rt_iim" is absent, not
             # silently upgraded. See plans/better_sage_filtering.md's B.6.
             if "rt_iim" in cfg.recalibration:
-                # min_charge/max_charge: explicit `[recalibration.rt_iim]`
+                # min_charge/max_charge: explicit `[recalibration.iim]`
                 # override if given, else mirror whatever charge range the
                 # SAGE run this feeds will itself search -- `cfg.sage`'s own
                 # `precursor_charge` if set, else SAGE's own compiled-in
@@ -1749,49 +1780,72 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 # per-precursor charges instead -- this must not crash on
                 # that, and should match SAGE's real default when it does.
                 default_precursor_charge = cfg.sage.get("precursor_charge", (2, 4))
-                rt_iim_min_charge = cfg.recalibration.rt_iim.get(
-                    "min_charge", default_precursor_charge[0]
-                )
-                rt_iim_max_charge = cfg.recalibration.rt_iim.get(
-                    "max_charge", default_precursor_charge[1]
-                )
-                # tolerance_percentiles: required explicitly in
-                # `[recalibration.rt_iim]`, never inherited from
-                # `cfg.recalibration`'s own (mz-scoped) value -- each
-                # dimension gets its own percentiles, deliberately not
-                # shared just because the values happen to look similar.
-                rt_iim_tolerance_lo, rt_iim_tolerance_hi = cfg.recalibration.rt_iim[
-                    "tolerance_percentiles"
-                ]
                 # RT and IIM candidate filtering are independently
                 # selectable -- default both (backward-compatible with
                 # every existing job config, which never set this key).
-                # See plans/rt_iim_independent_dimensions.md.
+                # `dimensions` is the only key `[recalibration.rt_iim]`
+                # still carries (2026-08-25) -- percentiles/method/charge
+                # range moved into their own per-dimension tables below,
+                # since they're only meaningful (and only required to be
+                # present) for a dimension that's actually active. See
+                # plans/rt_iim_independent_dimensions.md.
                 dimensions = tuple(
                     cfg.recalibration.rt_iim.get("dimensions", ["rt", "iim"])
                 )
 
+                # tolerance_percentiles/tolerance_method: required explicitly
+                # in `[recalibration.rt]`/`[recalibration.iim]` (separate
+                # tables, 2026-08-25 -- previously one shared
+                # `[recalibration.rt_iim].tolerance_percentiles` value for
+                # both dimensions, which made an asymmetric real-data finding
+                # for one dimension silently apply to the other too). Never
+                # inherited from `cfg.recalibration`'s own (mz-scoped)
+                # `[recalibration.mz]` value either -- each of the three
+                # dimensions (mz, rt, iim) gets its own percentiles/method,
+                # deliberately not shared just because the values happen to
+                # look similar. `tolerance_method`: `"theoretic"` (default,
+                # symmetric `median ± z*robust_sigma`) or `"empiric"` (plain
+                # percentiles) -- see `git/featureprediction`'s
+                # `tolerance.select_tolerance`.
                 if "rt" in dimensions:
+                    rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt["tolerance_percentiles"]
+                    rt_tolerance_method = cfg.recalibration.rt.get("tolerance_method", "theoretic")
+                    rt_server_url = _server_url_arg(cfg.recalibration.rt.get("server_url"))
                     P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
                         P,
                         P.dumped_peptides,
                         P.filtered_sage_results_tsv,
-                        tolerance_lo=rt_iim_tolerance_lo,
-                        tolerance_hi=rt_iim_tolerance_hi,
+                        tolerance_lo=rt_tolerance_lo,
+                        tolerance_hi=rt_tolerance_hi,
+                        tolerance_method=rt_tolerance_method,
+                        server_url=rt_server_url,
                         fdr=cfg.sage_summarize.fdr,
                     )
                 else:
                     P.predicted_rt = write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
 
                 if "iim" in dimensions:
+                    # min_charge/max_charge are IIM-specific (RT has no
+                    # charge dimension) -- live in `[recalibration.iim]`.
+                    rt_iim_min_charge = cfg.recalibration.iim.get(
+                        "min_charge", default_precursor_charge[0]
+                    )
+                    rt_iim_max_charge = cfg.recalibration.iim.get(
+                        "max_charge", default_precursor_charge[1]
+                    )
+                    iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim["tolerance_percentiles"]
+                    iim_tolerance_method = cfg.recalibration.iim.get("tolerance_method", "theoretic")
+                    iim_server_url = _server_url_arg(cfg.recalibration.iim.get("server_url"))
                     P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
                         P,
                         P.dumped_peptides,
                         P.filtered_sage_results_tsv,
                         min_charge=rt_iim_min_charge,
                         max_charge=rt_iim_max_charge,
-                        tolerance_lo=rt_iim_tolerance_lo,
-                        tolerance_hi=rt_iim_tolerance_hi,
+                        tolerance_lo=iim_tolerance_lo,
+                        tolerance_hi=iim_tolerance_hi,
+                        tolerance_method=iim_tolerance_method,
+                        server_url=iim_server_url,
                         fdr=cfg.sage_summarize.fdr,
                     )
                 else:
@@ -1819,8 +1873,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                         P.filtered_sage_results_tsv,
                         P.predicted_rt,
                         P.recalibrated_precursors,
-                        tolerance_lo=rt_iim_tolerance_lo,
-                        tolerance_hi=rt_iim_tolerance_hi,
+                        tolerance_lo=rt_tolerance_lo,
+                        tolerance_hi=rt_tolerance_hi,
+                        tolerance_method=rt_tolerance_method,
                         fdr=cfg.sage_summarize.fdr,
                     )
                     precursors_for_iim_correction = P.rt_corrected_precursors
@@ -1837,8 +1892,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                         P.filtered_sage_results_tsv,
                         P.predicted_iim,
                         precursors_for_iim_correction,
-                        tolerance_lo=rt_iim_tolerance_lo,
-                        tolerance_hi=rt_iim_tolerance_hi,
+                        tolerance_lo=iim_tolerance_lo,
+                        tolerance_hi=iim_tolerance_hi,
+                        tolerance_method=iim_tolerance_method,
                         fdr=cfg.sage_summarize.fdr,
                     )
                     final_precursors = P.rt_iim_corrected_precursors

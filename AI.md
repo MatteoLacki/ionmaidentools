@@ -91,14 +91,82 @@ place does not invalidate an existing node. `fragpipe_synthetic_pipeline` likewi
 requires `[mgf].config_path` when `output_format = "mgf"`.
 
 **Config derivation, not restatement** (see `git/featureprediction`'s
-`AI.md` for the numbers): `[recalibration.rt_iim]`'s `min_charge`/
+`AI.md` for the numbers): `[recalibration.iim]`'s `min_charge`/
 `max_charge` default to `cfg.sage.get("precursor_charge", (2, 4))` (SAGE's
 own compiled-in default) rather than crashing when `sage.precursor_charge`
-is unset, which real job configs often do. `tolerance_percentiles` is
-required explicitly in `[recalibration.rt_iim]` — deliberately *not*
-inherited from `cfg.recalibration`'s own (mz-scoped) value, since real
-values there (e.g. `[0, 100]`, no trimming) would be a bad default for RT
-specifically.
+is unset, which real job configs often do.
+
+**`tolerance_percentiles`/`tolerance_method`: one table per dimension, not
+shared (2026-08-25)** — `[recalibration.mz]`, `[recalibration.rt]`, and
+`[recalibration.iim]` each carry their own `tolerance_percentiles`
+(required explicitly, never inherited from a sibling dimension or from a
+different table) and optional `tolerance_method` (`"theoretic"`, the
+default — symmetric `median ± z*robust_sigma` — or `"empiric"`, plain
+percentiles; see `git/featureprediction`'s `tolerance.select_tolerance`
+and `git/searchops`'s `recalibration._select_tolerance`, separate
+implementations of the same dispatch). Previously RT and IIM shared one
+`[recalibration.rt_iim].tolerance_percentiles` value, and mz's own value
+sat at `cfg.recalibration`'s root — a real F9477 finding
+(2026-08-25: mass-error residuals are visibly right-skewed, RT residuals
+much less so) showed treating all three the same was masking real
+per-dimension differences. `[recalibration.rt_iim]` itself still exists as
+the mode-3 trigger key (`if "rt_iim" in cfg.recalibration:`) and now only
+carries `dimensions` (which of `rt`/`iim` are active) — `tolerance_lo`/
+`tolerance_hi`/`min_charge`/`max_charge` are only read from
+`[recalibration.rt]`/`[recalibration.iim]` when that dimension is actually
+in `dimensions`, so a job enabling only one dimension doesn't need the
+other table to exist at all. `predict_rt`/`predict_iim`/
+`correct_precursors_rt`/`correct_precursors_iim` (the `@command` rules)
+each gained a `tolerance_method: str` parameter, threaded to
+`feature-prediction-*`'s `--tolerance-method` flag. mz needs no equivalent
+Python-side change beyond the job-config nesting — `write_recalibration_config`
+already serializes the whole `cfg.recalibration` dict verbatim as
+`recalibration_config.toml`, so `searchops`'s own config-reading code is
+what changed there, not this repo's.
+
+No back-compat shim for the old shared/root-level keys — existing job
+configs were rewritten directly (5 of them set mz's `tolerance_percentiles`
+using the current `fragment_model`/`precursor_model` schema:
+`f9468_fragpipe.toml`, `f9477_gam_test.toml`, `b6699_gam_test.toml`,
+`f9477_fragpipe.toml`, `short_test_recal.toml`). No committed job config
+set `[recalibration.rt_iim]` at all as of this change — the RT/IIM mode-3
+F9477 comparisons referenced elsewhere in this file were run via ad-hoc
+CLI-level config overrides, not persisted job files, so there was nothing
+to migrate for that key. Several other `jobs/*.toml` files
+(`b6699_test_recal.toml`, `quick_test_10k_recal.toml`, `full_recal_grid.toml`,
+`inspect_recalibrate.toml`, `quick_test_10k_recal_grid.toml`,
+`f9468_test_recal.toml`, `short_test_recal_tol_grid.toml`,
+`short_test_recal_shared_shape_grid.toml`, `short_test_recal_grid.toml`)
+use an older, already-stale `recalibration` schema (flat `model = "..."`,
+no `fragment_model`/`precursor_model` sub-tables) that predates the current
+`searchops.recalibrate_pmsms_mz`/`recalibrate_precursors` split and would
+already fail against current code independent of this change — left
+untouched, not this change's problem to fix.
+
+**`[recalibration.rt]`/`[recalibration.iim].server_url` (2026-08-25)** —
+optional, either a plain string or a TOML array (`server_url = ["ip0:8500",
+"ip1:8500"]`, tried in that order, falling back on failure — see
+`git/featureprediction`'s `AI.md` for the fallback design). `_server_url_arg`
+(`pipelines.py`) normalizes either shape into the single comma-joined string
+`predict_rt`/`predict_iim`'s `--server-url` flag expects (`feature-prediction-
+generate-{rt,iim}` splits it back into a list), defaulting to
+`_DEFAULT_KOINA_SERVER_URL` — a literal duplicate of `koina_client
+.DEFAULT_SERVER_URL`'s value, since this repo shells out to a separate
+`venvs/featureprediction` install and can't import that package directly
+(same reasoning as `default_precursor_charge` duplicating SAGE's own
+compiled-in `(2, 4)`, just above). Unlike `tolerance_percentiles`/
+`tolerance_method`, `server_url` is *always* passed on the command line
+(the `@command` template has no conditional-flag mechanism for static
+templates — see `_run_sage_with_predicted_command`'s docstring on that
+limitation), computed by Python first so the flag is never omitted, just
+resolves to the same default `koina_client` itself would use when the job
+config doesn't set it.
+
+`ssl`/`timeout`/`retries`/`backoff_factor` (see `git/featureprediction`'s
+`AI.md`) are **not** yet wired through `pipelines.py` — only `server_url`
+was added at the pipeline-config level so far; those four are available at
+the CLI/`feature_prediction.predict` config-dict level today, add them here
+the same way if a job actually needs to set one.
 
 ## Conventions to follow when editing this file
 
