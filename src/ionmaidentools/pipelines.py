@@ -1000,23 +1000,32 @@ def write_no_prediction_marker(text: str):
 
 _NO_PREDICTION_TEXT = "no prediction requested for this dimension\n"
 
-# Duplicated from `git/featureprediction`'s `koina_client.DEFAULT_SERVER_URL`
-# -- can't import across venvs (this repo shells out to a separate
-# `venvs/featureprediction` install, doesn't depend on that package
-# directly), same reasoning as `default_precursor_charge` duplicating
-# SAGE's own compiled-in (2, 4) default just above.
-_DEFAULT_KOINA_SERVER_URL = "192.168.1.222:8500"
+# Duplicated from `git/featureprediction`'s `koina_client` -- can't import
+# across venvs (this repo shells out to a separate `venvs/featureprediction`
+# install, doesn't depend on that package directly), same reasoning as
+# `default_precursor_charge` duplicating SAGE's own compiled-in (2, 4)
+# default just above.
+#
+# Two different defaults, not one shared value: `predict_iim` still goes
+# through `koinapy.Koina` (IM2Deep), which speaks **gRPC** on :8500;
+# `predict_rt`'s direct-HTTP Chronologer client needs the *separate* HTTP
+# REST port, :8501 -- verified live (2026-08-25) that POSTing plain HTTP to
+# :8500 gets back raw HTTP/2 SETTINGS-frame bytes (`BadStatusLine`), since
+# gRPC always runs over HTTP/2; :8501 is real Triton HTTP on the same host.
+_DEFAULT_KOINA_GRPC_SERVER_URL = "192.168.1.222:8500"  # predict_iim (koinapy/IM2Deep)
+_DEFAULT_KOINA_HTTP_SERVER_URL = "192.168.1.222:8501"  # predict_rt (direct HTTP/Chronologer)
 
 
-def _server_url_arg(value: str | list[str] | None) -> str:
+def _server_url_arg(value: str | list[str] | None, default: str) -> str:
     """`[recalibration.rt]`/`[recalibration.iim]`'s `server_url` (a plain
     string or a TOML array -- either is valid config shape) into the single
     comma-separated string `feature-prediction-generate-{rt,iim}`'s
     `--server-url` flag expects (it splits on comma back into a priority
-    list -- ip0 tried first, falling back to ip1 etc. on failure). Defaults
-    to `_DEFAULT_KOINA_SERVER_URL` when unset."""
+    list -- ip0 tried first, falling back to ip1 etc. on failure). `default`
+    must match the caller's own protocol/port (see the two constants
+    above -- RT and IIM are not interchangeable here)."""
     if value is None:
-        return _DEFAULT_KOINA_SERVER_URL
+        return default
     if isinstance(value, str):
         return value
     return ",".join(value)
@@ -1810,7 +1819,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 if "rt" in dimensions:
                     rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt["tolerance_percentiles"]
                     rt_tolerance_method = cfg.recalibration.rt.get("tolerance_method", "theoretic")
-                    rt_server_url = _server_url_arg(cfg.recalibration.rt.get("server_url"))
+                    rt_server_url = _server_url_arg(
+                        cfg.recalibration.rt.get("server_url"), _DEFAULT_KOINA_HTTP_SERVER_URL
+                    )
                     P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
                         P,
                         P.dumped_peptides,
@@ -1835,7 +1846,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     )
                     iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim["tolerance_percentiles"]
                     iim_tolerance_method = cfg.recalibration.iim.get("tolerance_method", "theoretic")
-                    iim_server_url = _server_url_arg(cfg.recalibration.iim.get("server_url"))
+                    iim_server_url = _server_url_arg(
+                        cfg.recalibration.iim.get("server_url"), _DEFAULT_KOINA_GRPC_SERVER_URL
+                    )
                     P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
                         P,
                         P.dumped_peptides,
