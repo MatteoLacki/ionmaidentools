@@ -50,6 +50,20 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   `patch_fragpipe_workflow`/`write_fragpipe_manifest`/`run_fragpipe`/`extract_fragpipe_log`/
   `summarize_fragpipe`).
 
+## WG-indexed MS2 extraction benchmark target
+
+`ionmaiden_pipeline` exposes `ms2_wg_events` as an independently requestable target.
+Its `tdf2ms2_wg` rule runs `git/ionmaidenmetal/build/tdf2ms ms2-wg` with the
+Necroflow-allocated thread count and produces `events_ms2_wg.mmappet`. The command
+validates all three mmappet schemas plus `stats.json` before Necroflow marks the node
+complete.
+
+This target deliberately has no downstream consumer yet. Existing pseudo-MS/MS stages
+continue to use `ms2_events` and the established frame/scan layout; request
+`ms2_wg_events` explicitly to benchmark or inspect the new layout without changing
+production results. Necroflow records wall time and output size automatically in the
+node `.rip/run.toml`.
+
 ## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 
 `ionmaiden_pipeline`'s `if "sage" in cfg:` branch has three modes. Each of
