@@ -75,8 +75,10 @@ sub-list; removed 2026-08-25, see below) — see
    off the same `filtered_sage_results_tsv` anchors the mz fits use, then
    `correct_precursors_rt`/`correct_precursors_iim` chain onto
    `recalibrated_precursors`, then `update_sage_config_rt_iim` chains onto
-   `update_sage_config`'s output to add `rt_tol_sec`/`mobility_tol` for
-   whichever dimensions are active, then `run_sage_with_predicted` (a
+   `update_sage_config`'s output to add `rt_tol_sec`+`rt_sigma_sec` and/or
+   `mobility_tol`+`iim_sigma` (two `config_set` calls per active dimension,
+   not one — see below) for whichever dimensions are active, then
+   `run_sage_with_predicted` (a
    distinct rule from plain `run_sage`, adding `--predicted-rt`/
    `--predicted-iim` — necroflow `@command` templates are static, can't
    conditionally add a flag, so this uses a Python command callback
@@ -115,6 +117,24 @@ MGF export is optional: `convert_search_pmsms_to_mgf` is wired only when
 artifact, so different paths produce different nodes; changing one config file in
 place does not invalidate an existing node. `fragpipe_synthetic_pipeline` likewise
 requires `[mgf].config_path` when `output_format = "mgf"`.
+
+**`update_sage_config_rt_iim` writes `rt_sigma_sec`/`iim_sigma`, not just
+`rt_tol_sec`/`mobility_tol` (2026-08-26).** SAGE's `Input::build()` requires
+`predicted_rt`+`rt_tol_sec`+`rt_sigma_sec` all-or-none (same for the IIM
+trio, see the sage fork's `AI.md`) — `_update_sage_config_rt_iim_command`
+previously only chained one `config_set` per active dimension (`rt_tol_sec`/
+`mobility_tol`), so SAGE rejected the config the instant RT/IIM
+recalibration mode ran end-to-end, on every job, forever (nothing before
+this could have exercised mode 3 successfully). Now two `config_set` calls
+per active dimension, both sourced from the same `rt_tolerance`/
+`mobility_tolerance` artifact (`git/featureprediction`'s
+`correct_precursors_rt`/`correct_precursors_iim` write `rt_sigma_sec`/
+`iim_sigma` as sibling top-level keys in that same file — see that repo's
+`AI.md`, which had the identical gap on its own side, fixed alongside this).
+Found via a real end-to-end F9477 run while A/B-testing the sage fork's new
+`combined_score` ranking, not by inspection — there was no test on either
+side that would have caught this, since necroflow's `--requests` on smoke
+configs used so far all resolved to nodes upstream of `run_sage_with_predicted`.
 
 **Config derivation, not restatement** (see `git/featureprediction`'s
 `AI.md` for the numbers): `[recalibration.iim]`'s `min_charge`/

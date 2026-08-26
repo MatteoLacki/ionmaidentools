@@ -68,6 +68,10 @@ class Ms2Events(NodeType):
     filename = "events.ms2"
 
 
+class Ms2WgEvents(MmappetDataset):
+    filename = "events_ms2_wg.mmappet"
+
+
 class ScaleEstimationConfig(NodeType):
     filename = "scale_estimation_config.toml"
 
@@ -597,6 +601,20 @@ def tdf2ms1(tdf: BrukerD):
 def tdf2ms2(tdf: BrukerD):
     ms2 = output(Ms2Events)
     return ms2
+
+
+@command(
+    "git/ionmaidenmetal/build/tdf2ms ms2-wg {tdf} {ms2_wg}"
+    " --threads {threads} --overwrite"
+    " && test -f {ms2_wg}/data.mmappet/schema.txt"
+    " && test -f {ms2_wg}/wg_tof_row_starts.mmappet/schema.txt"
+    " && test -f {ms2_wg}/wg_tof_scan_diff.mmappet/schema.txt"
+    " && test -f {ms2_wg}/stats.json",
+    threads=CORES,
+)
+def tdf2ms2_wg(tdf: BrukerD):
+    ms2_wg = output(Ms2WgEvents)
+    return ms2_wg
 
 
 @text_file
@@ -1205,17 +1223,26 @@ def correct_precursors_iim(
 
 
 def _update_sage_config_rt_iim_command(args: CommandArgs) -> str:
-    """Python command callback -- chains 0, 1, or 2 `config_set` calls
+    """Python command callback -- chains 0, 2, or 4 `config_set` calls
     based on `args.config.dimensions` (RT/IIM independently optional),
     same reasoning as `_run_sage_with_predicted_command`: `rt_tolerance`/
     `mobility_tolerance` are always real DAG edges (resolve to the
     `NoPrediction` sentinel when inactive), but only the active
-    dimension's `config_set` call actually runs -- decided by the scalar
+    dimension's `config_set` calls actually run -- decided by the scalar
     `dimensions` config, never by inspecting file content. In practice
     `dimensions` is never empty here (the pipeline factory only calls this
     rule inside `if "rt" in cfg.recalibration or "iim" in cfg.recalibration:`,
     which always sets at least one dimension), but a plain copy-through is
     a safe fallback.
+
+    Each active dimension contributes *two* steps, not one: `rt_tol_sec`/
+    `mobility_tol` (the hard-eviction window) and `rt_sigma_sec`/`iim_sigma`
+    (the LDA/ranking z² scale) -- both read from the same `rt_tolerance`/
+    `mobility_tolerance` artifact (`git/featureprediction`'s
+    `correct_precursors_rt`/`correct_precursors_iim` write them as sibling
+    top-level keys in one file, see that repo's `AI.md`), since SAGE's
+    `Input::build` rejects `predicted_rt`/`rt_tol_sec` being set without
+    `rt_sigma_sec` (and vice versa for IIM) -- see `plans/lda_external_rt_iim_features.md`.
     """
     sage_config = shlex.quote(str(args.inputs.sage_config))
     recalibrated_sage_config = shlex.quote(str(args.outputs.recalibrated_sage_config))
@@ -1225,17 +1252,29 @@ def _update_sage_config_rt_iim_command(args: CommandArgs) -> str:
     steps = []
     if "rt" in dimensions:
         rt_tolerance = shlex.quote(str(args.inputs.rt_tolerance))
-        next_out = shlex.quote(str(args.workdir / "rt_tol_updated.json"))
+        tol_out = shlex.quote(str(args.workdir / "rt_tol_updated.json"))
         steps.append(
-            f".venv/bin/python -m necroflow.tools.config_set {current} {next_out}"
+            f".venv/bin/python -m necroflow.tools.config_set {current} {tol_out}"
             f" --target rt_tol_sec --source {rt_tolerance} --source-field rt_tol_sec"
         )
-        current = next_out
+        current = tol_out
+        sigma_out = shlex.quote(str(args.workdir / "rt_sigma_updated.json"))
+        steps.append(
+            f".venv/bin/python -m necroflow.tools.config_set {current} {sigma_out}"
+            f" --target rt_sigma_sec --source {rt_tolerance} --source-field rt_sigma_sec"
+        )
+        current = sigma_out
     if "iim" in dimensions:
         mobility_tolerance = shlex.quote(str(args.inputs.mobility_tolerance))
+        tol_out = shlex.quote(str(args.workdir / "mobility_tol_updated.json"))
+        steps.append(
+            f".venv/bin/python -m necroflow.tools.config_set {current} {tol_out}"
+            f" --target mobility_tol --source {mobility_tolerance} --source-field mobility_tol"
+        )
+        current = tol_out
         steps.append(
             f".venv/bin/python -m necroflow.tools.config_set {current} {recalibrated_sage_config}"
-            f" --target mobility_tol --source {mobility_tolerance} --source-field mobility_tol"
+            f" --target iim_sigma --source {mobility_tolerance} --source-field iim_sigma"
         )
         current = recalibrated_sage_config
     if current != recalibrated_sage_config:
@@ -1559,6 +1598,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
     P.ms2_events = tdf2ms2(P, P.tdf)
+    P.ms2_wg_events = tdf2ms2_wg(P, P.tdf)
 
     # MS1 Scale Calibration
     P.scale_estimation_config = write_scale_estimation_config(
