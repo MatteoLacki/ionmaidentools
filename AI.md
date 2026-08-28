@@ -50,6 +50,20 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   `patch_fragpipe_workflow`/`write_fragpipe_manifest`/`run_fragpipe`/`extract_fragpipe_log`/
   `summarize_fragpipe`).
 
+## C++ MS1 extraction
+
+`ionmaiden_pipeline` uses `git/ionmaidenmetal/build/tdf2ms ms1` for `ms1_events`,
+passing the Necroflow-allocated thread count and `--overwrite`. The rule validates both
+mmappet split-index datasets and the event-dataset schema before completion. The in-memory
+slice contract is unchanged from `d2ms1`; both indices now use the common mmappet-array
+format, so all peak-picking and precursor consumers retain the same `(tof,urt,scan)` slices.
+
+The converter decompresses each MS1 frame once, stable-count-sorts it to a `(tof,scan)` run, then
+uses event-balanced TOF shards to merge runs into disjoint sequential mmap regions while building
+the split index. Exact comparisons with `d2ms1` passed on F9477, F9468, and B6699; observed wall
+speedups were 3.78x, 2.76x, and 3.43x. Python `d2ms1` remains installed as a reference/debug tool,
+not the pipeline default.
+
 ## WG-indexed MS2 extraction benchmark target
 
 `ionmaiden_pipeline` exposes `ms2_wg_events` as an independently requestable target.

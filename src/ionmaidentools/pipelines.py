@@ -587,10 +587,12 @@ def write_pipeline_config(text: str):
 
 
 @command(
-    "venvs/common/bin/d2ms1 {tdf} {ms1}"
-    " && test -f {ms1}/tof_row_starts.dat"
-    " && test -f {ms1}/tof_urt_diff_index.dat"
-    " && test -f {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt"
+    "git/ionmaidenmetal/build/tdf2ms ms1 {tdf} {ms1}"
+    " --threads {threads} --overwrite"
+    " && test -f {ms1}/tof_row_starts.mmappet/schema.txt"
+    " && test -f {ms1}/tof_urt_diff_index.mmappet/schema.txt"
+    " && test -f {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt",
+    threads=CORES,
 )
 def tdf2ms1(tdf: BrukerD):
     ms1 = output(Ms1Events)
