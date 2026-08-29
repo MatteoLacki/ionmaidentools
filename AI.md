@@ -64,19 +64,19 @@ the split index. Exact comparisons with `d2ms1` passed on F9477, F9468, and B669
 speedups were 3.78x, 2.76x, and 3.43x. Python `d2ms1` remains installed as a reference/debug tool,
 not the pipeline default.
 
-## WG-indexed MS2 extraction benchmark target
+## Compact TOF/scan/frame MS2 extraction benchmark target
 
-`ionmaiden_pipeline` exposes `ms2_wg_events` as an independently requestable target.
-Its `tdf2ms2_wg` rule runs `git/ionmaidenmetal/build/tdf2ms ms2-wg` with the
-Necroflow-allocated thread count and produces `events_ms2_wg.mmappet`. The command
-validates all three mmappet schemas plus `stats.json` before Necroflow marks the node
-complete.
+`ionmaiden_pipeline` exposes `ms2_tsf_events` as an independently requestable target.
+Its `tdf2ms2_tsf` rule runs `git/ionmaidenmetal/build/tdf2ms ms2-tsf` with the
+Necroflow-allocated thread count and produces `events_ms2_tsf.mmappet`. The command
+validates the payload and flat TOF/scan row-start mmappet schemas plus `stats.json`
+before Necroflow marks the node complete.
 
 This target deliberately has no downstream consumer yet. Existing pseudo-MS/MS stages
 continue to use `ms2_events` and the established frame/scan layout; request
-`ms2_wg_events` explicitly to benchmark or inspect the new layout without changing
-production results. Necroflow records wall time and output size automatically in the
-node `.rip/run.toml`.
+`ms2_tsf_events` explicitly to benchmark or inspect the compact `(tof,scan,frame)`
+layout without changing production results. Necroflow records wall time and output size
+automatically in the node `.rip/run.toml`.
 
 ## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 
