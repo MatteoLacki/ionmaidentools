@@ -78,6 +78,20 @@ continue to use `ms2_events` and the established frame/scan layout; request
 layout without changing production results. Necroflow records wall time and output size
 automatically in the node `.rip/run.toml`.
 
+## Query-oriented TOF/frame/scan MS2 extraction benchmark target
+
+`ionmaiden_pipeline` also exposes `ms2_tfs_events` independently. Its
+`tdf2ms2_tfs` rule runs `git/ionmaidenmetal/build/tdf2ms ms2-tfs` with the
+Necroflow thread allocation and publishes `events_ms2_tfs.mmappet`. Completion
+checks cover intensity data, packed-scan schema/shape, TOF index schema/shape,
+frame index schema, and `stats.json`.
+
+This node has no downstream consumer and does not replace `ms2_events` or
+`ms2_tsf_events`. Request it to benchmark frame-selective box queries against the
+`(tof,frame,scan)` layout. Scans use four little-endian uint10 values per five bytes;
+TOF and frame headers locate the narrow ranges without expanding scan IDs. F9477
+completed in 5.07 s and 1.554 GB, with all 160,689,740 events matching TSF exactly.
+
 ## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 
 `ionmaiden_pipeline`'s `if "sage" in cfg:` branch has three modes. Each of

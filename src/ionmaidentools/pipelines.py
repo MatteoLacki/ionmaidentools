@@ -68,6 +68,10 @@ class Ms2Events(NodeType):
     filename = "events.ms2"
 
 
+class Ms2TfsEvents(MmappetDataset):
+    filename = "events_ms2_tfs.mmappet"
+
+
 class Ms2TsfEvents(MmappetDataset):
     filename = "events_ms2_tsf.mmappet"
 
@@ -603,6 +607,23 @@ def tdf2ms1(tdf: BrukerD):
 def tdf2ms2(tdf: BrukerD):
     ms2 = output(Ms2Events)
     return ms2
+
+
+@command(
+    "git/ionmaidenmetal/build/tdf2ms ms2-tfs {tdf} {ms2_tfs}"
+    " --threads {threads} --overwrite"
+    " && test -f {ms2_tfs}/data.mmappet/schema.txt"
+    " && test -f {ms2_tfs}/packed_scans.mmappet/schema.txt"
+    " && test -f {ms2_tfs}/packed_scans.mmappet/shape.txt"
+    " && test -f {ms2_tfs}/tof_index.mmappet/schema.txt"
+    " && test -f {ms2_tfs}/tof_index.mmappet/shape.txt"
+    " && test -f {ms2_tfs}/frame_index.mmappet/schema.txt"
+    " && test -f {ms2_tfs}/stats.json",
+    threads=CORES,
+)
+def tdf2ms2_tfs(tdf: BrukerD):
+    ms2_tfs = output(Ms2TfsEvents)
+    return ms2_tfs
 
 
 @command(
@@ -1600,6 +1621,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
     P.ms2_events = tdf2ms2(P, P.tdf)
+    P.ms2_tfs_events = tdf2ms2_tfs(P, P.tdf)
     P.ms2_tsf_events = tdf2ms2_tsf(P, P.tdf)
 
     # MS1 Scale Calibration
