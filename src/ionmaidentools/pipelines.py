@@ -466,6 +466,17 @@ class FragmentIntensityCache(NodeType):
     filename = "fragment_intensity_cache"
 
 
+class FragmentIntensityForSage(NodeType):
+    """Job-scoped parquet export from `git/featureprediction`'s
+    `export_fragment_intensity_for_sage` -- `sequence, charge,
+    fragment_annotation_id, fragment_intensity` for exactly this job's
+    `dumped_peptides` x charge range, read back out of the (much bigger,
+    shared, ever-growing) `FragmentIntensityCache`. Not yet consumed by
+    SAGE itself -- see `git/featureprediction`'s AI.md."""
+
+    filename = "fragment_intensity_for_sage.parquet"
+
+
 class NoPrediction(NodeType):
     """Zero-cost sentinel standing in for `RtTolerance`/`MobilityTolerance`
     when that dimension isn't active (`[recalibration.rt]`/
@@ -1074,6 +1085,37 @@ def predict_fragment_intensity(
     """
     fragment_intensity_cache = output(FragmentIntensityCache)
     return fragment_intensity_cache
+
+
+@command(
+    "venvs/featureprediction/bin/feature-prediction-export-fragments-for-sage"
+    " {dumped_peptides} {fragment_intensity_cache} {fragment_intensity_for_sage}"
+    " --min-charge {min_charge} --max-charge {max_charge} --collision-energy {collision_energy}"
+)
+def export_fragment_intensity_for_sage(
+    dumped_peptides: DumpedPeptides,
+    fragment_intensity_cache: FragmentIntensityCache,
+    min_charge: int,
+    max_charge: int,
+    collision_energy: float,
+):
+    """Scope `fragment_intensity_cache` (shared, ever-growing across every
+    job) down to exactly this job's `dumped_peptides` x `[min_charge,
+    max_charge]`, via `git/featureprediction`'s DuckDB-based export -- see
+    that repo's AI.md, "`export_fragment_intensity.py`". Ordinary
+    (non-mutable) rule despite depending on a `mutable=True` parent: per
+    `docs/rules.md`'s "Mutable Rules", "if a mutable call executes during
+    the current run, every consumer replays" -- so this always sees the
+    cache state left by `predict_fragment_intensity`'s own most recent
+    (real, non-forced) run in the same invocation, never a stale one.
+    Independently requestable, same reasoning as `predict_fragment_intensity`
+    itself -- no downstream consumer in the DAG yet (SAGE doesn't read this
+    export), so it must never run just because `dumped_peptides`/
+    `fragment_intensity_cache` exist, only when explicitly requested via
+    `.requests`.
+    """
+    fragment_intensity_for_sage = output(FragmentIntensityForSage)
+    return fragment_intensity_for_sage
 
 
 def _run_sage_command(args: CommandArgs) -> str:
@@ -1830,13 +1872,27 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # cfg.sage.precursor_charge-or-SAGE's-own-(2,4)-default derivation
         # `[recalibration.iim]` uses below, computed here too since this
         # runs unconditionally (not nested inside `"recalibration" in cfg`).
+        _fragment_min_charge, _fragment_max_charge = cfg.sage.get("precursor_charge", (2, 4))
         P.predicted_fragment_intensity = predict_fragment_intensity(
             P,
             P.dumped_peptides,
-            min_charge=cfg.sage.get("precursor_charge", (2, 4))[0],
-            max_charge=cfg.sage.get("precursor_charge", (2, 4))[1],
+            min_charge=_fragment_min_charge,
+            max_charge=_fragment_max_charge,
             collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
             fragmentation_type=_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE,
+        )
+        # Same independently-requestable reasoning (see
+        # `export_fragment_intensity_for_sage`'s docstring) -- reuses the
+        # same charge range/collision_energy the cache above was filled
+        # with, so a request for this never sees a coverage gap from a
+        # mismatched range.
+        P.fragment_intensity_for_sage = export_fragment_intensity_for_sage(
+            P,
+            P.dumped_peptides,
+            P.predicted_fragment_intensity,
+            min_charge=_fragment_min_charge,
+            max_charge=_fragment_max_charge,
+            collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
         )
 
         if "recalibration" in cfg:

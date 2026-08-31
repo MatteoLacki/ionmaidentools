@@ -130,6 +130,31 @@ piece of `plans/sage_features_on_while_searching.md`, not done here. See
 `plans/fragment_intensity_cache.md` for the cache's own design (predictor
 choice, slot-numbering scheme, dtype choices).
 
+### `export_fragment_intensity_for_sage`: ordinary rule consuming a mutable parent (2026-08-31)
+
+Wraps `git/featureprediction`'s `feature-prediction-export-fragments-for-sage`
+(DuckDB-based; see that repo's AI.md) — scopes the shared, ever-growing
+`FragmentIntensityCache` down to one job's `dumped_peptides` x charge range,
+as a single parquet file (`FragmentIntensityForSage`). An **ordinary**
+(non-mutable) rule, even though one of its inputs
+(`predict_fragment_intensity`'s output) is `mutable=True` — per
+`docs/rules.md`'s "Mutable Rules", "if a mutable call executes during the
+current run, every consumer replays", so necroflow itself guarantees this
+always sees whatever cache state `predict_fragment_intensity` left behind in
+the same invocation, with no extra bookkeeping needed here. Same
+independently-requestable reasoning as its parent — no downstream SAGE
+consumer yet, never runs just because `dumped_peptides` exists.
+
+Verified end-to-end against the real full-F9477 setup (2026-08-31,
+`jobs/f9477_gam_test.toml` with `.requests = ["fragment_intensity_for_sage"]`):
+dry-run correctly showed only this one node would run (5 already up-to-date,
+including the mutable cache itself — confirming the mutable-consumer
+dependency doesn't force a spurious recompute of its parent). Real run:
+116.6s, exit 0, 1.9GiB output parquet, `2,028,474` of `18,902,646`
+(sequence, charge) pairs omitted (too-long peptides / not yet filled) —
+identical warning counts to `git/featureprediction`'s own standalone-script
+verification of the same export logic.
+
 ## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 
 `ionmaiden_pipeline`'s `if "sage" in cfg:` branch has three modes. Each of
