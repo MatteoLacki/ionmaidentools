@@ -157,6 +157,11 @@ verification of the same export logic. Re-verified after that repo's
 `ORDER BY ce.start` fix (see its AI.md) via `--invalidate
 fragment_intensity_for_sage`: 62.4s, same row count, same warning counts,
 output byte-for-byte re-checked against `PredictionCache.lookup()`.
+**Re-verified again after the pointer-export redesign** (exports `sequence,
+charge, start, end` instead of copying the sparse payload — see that
+repo's AI.md): 18.0s, 479MiB (down from 1.9GiB), same row/warning counts,
+output re-checked against `PredictionCache.lookup()` + direct
+`arrays.mmappet` reads at the resolved ranges.
 
 ## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 

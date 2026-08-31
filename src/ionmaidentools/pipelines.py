@@ -467,12 +467,15 @@ class FragmentIntensityCache(NodeType):
 
 
 class FragmentIntensityForSage(NodeType):
-    """Job-scoped parquet export from `git/featureprediction`'s
-    `export_fragment_intensity_for_sage` -- `sequence, charge,
-    fragment_annotation_id, fragment_intensity` for exactly this job's
-    `dumped_peptides` x charge range, read back out of the (much bigger,
-    shared, ever-growing) `FragmentIntensityCache`. Not yet consumed by
-    SAGE itself -- see `git/featureprediction`'s AI.md."""
+    """Job-scoped *index* from `git/featureprediction`'s
+    `export_fragment_intensity_for_sage` -- `sequence, charge, start, end`
+    pointers (not a copy of the sparse payload) for exactly this job's
+    `dumped_peptides` x charge range, resolved against the (much bigger,
+    shared, ever-growing) `FragmentIntensityCache`. A future SAGE reader
+    keeps that cache's `arrays.mmappet` mmapped and uses this file only to
+    look up which `[start, end)` range belongs to which `(sequence,
+    charge)` -- see `git/featureprediction`'s AI.md. Not yet consumed by
+    SAGE itself."""
 
     filename = "fragment_intensity_for_sage.parquet"
 
