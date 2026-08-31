@@ -153,7 +153,10 @@ dependency doesn't force a spurious recompute of its parent). Real run:
 116.6s, exit 0, 1.9GiB output parquet, `2,028,474` of `18,902,646`
 (sequence, charge) pairs omitted (too-long peptides / not yet filled) —
 identical warning counts to `git/featureprediction`'s own standalone-script
-verification of the same export logic.
+verification of the same export logic. Re-verified after that repo's
+`ORDER BY ce.start` fix (see its AI.md) via `--invalidate
+fragment_intensity_for_sage`: 62.4s, same row count, same warning counts,
+output byte-for-byte re-checked against `PredictionCache.lookup()`.
 
 ## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 
