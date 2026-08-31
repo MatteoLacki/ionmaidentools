@@ -1151,6 +1151,20 @@ def _run_sage_command(args: CommandArgs) -> str:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
     if args.inputs.predicted_iim is not None:
         flags += f" --predicted-iim {shlex.quote(str(args.inputs.predicted_iim))}"
+    # Both-or-neither, mirroring Rust's own `Input::build()` validation --
+    # `predicted_fragment_intensity_cache` is the *directory* the
+    # PredictionCache node produced; the Rust reader only ever wants its
+    # `arrays.mmappet` subdirectory (never `index.sqlite3`/`write.lock`),
+    # see `docs/ai/predicted_fragment_intensity.md`.
+    if args.inputs.predicted_fragment_intensity_index is not None:
+        frag_index = shlex.quote(str(args.inputs.predicted_fragment_intensity_index))
+        frag_cache = shlex.quote(
+            str(args.inputs.predicted_fragment_intensity_cache / "arrays.mmappet")
+        )
+        flags += (
+            f" --predicted-fragment-intensity-index {frag_index}"
+            f" --predicted-fragment-intensity-cache {frag_cache}"
+        )
 
     return (
         f"{sage_binary} --version && {sage_binary} -f {fasta}"
@@ -1170,6 +1184,8 @@ def run_sage(
     sage_binary: SageBinary,
     predicted_rt: PredictedRt | None = None,
     predicted_iim: PredictedIim | None = None,
+    predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
+    predicted_fragment_intensity_cache: FragmentIntensityCache | None = None,
 ):
     """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
     Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
@@ -1179,6 +1195,13 @@ def run_sage(
     (`update_sage_config_rt_iim`), same requirement `Input::build()`
     enforces Rust-side. See plans/better_sage_filtering.md's B.4-B.6 and
     plans/rt_iim_independent_dimensions.md.
+
+    `predicted_fragment_intensity_index`/`_cache` are likewise both-or-
+    neither (mixed Node/`None`), gated by `"fragment_intensity" in cfg` at
+    the pipeline-factory call site, not by anything in this function --
+    feature-only (`ms2_*` scoring columns), no hard eviction, independent
+    of predicted_rt/predicted_iim. See
+    `software/sage/devel_fixed/docs/ai/predicted_fragment_intensity.md`.
     """
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
@@ -1409,6 +1432,14 @@ def _mokapot_command(args: CommandArgs) -> str:
     be added conditionally (empty for the plain-Sage-PIN call, `--plugin
     xgboost` for the sagepy-rescore call) without necroflow's string-
     template placeholders needing to express a conditional substring.
+    Same reasoning for `--mode`/`--rt-source`/`--iim-source`: only the
+    plain-Sage-PIN call passes `rt_source`/`iim_source`, which selects
+    `scripts/mokapot_pin_adapter.py --mode sage` (its leakage-safe feature
+    registry, see `plans/mokapot_leakage_safe_pin.md`); the sagepy-rescore
+    call passes neither, so the adapter defaults to `--mode passthrough`
+    (its original, unchanged, FileName-drop-only behavior) -- that PIN is
+    already leakage-filtered upstream by
+    `sagepy_rescore.features.build_feature_frame`.
     """
     pin = shlex.quote(str(args.inputs.pin))
     used_pin = shlex.quote(str(args.outputs.used_pin))
@@ -1416,8 +1447,14 @@ def _mokapot_command(args: CommandArgs) -> str:
     psms = shlex.quote(str(args.outputs.psms))
     workdir = shlex.quote(str(args.workdir))
     plugin_flag = f" --plugin {args.config.plugin}" if args.config.plugin else ""
+    adapter_flags = ""
+    if args.config.rt_source is not None or args.config.iim_source is not None:
+        rt_source = shlex.quote(args.config.rt_source or "none")
+        iim_source = shlex.quote(args.config.iim_source or "none")
+        adapter_flags = f" --mode sage --rt-source {rt_source} --iim-source {iim_source}"
     return (
         f"venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {pin} -o {used_pin}"
+        f"{adapter_flags}"
         f" && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
         f" --train_fdr {args.config.train_fdr} --test_fdr {args.config.test_fdr}"
         f"{plugin_flag}"
@@ -1431,6 +1468,8 @@ def mokapot(
     train_fdr: float = 0.05,
     test_fdr: float = 0.01,
     plugin: str | None = None,
+    rt_source: str | None = None,
+    iim_source: str | None = None,
 ):
     used_pin = output(MokapotUsedPin)
     peptides = output(MokapotPeptides)
@@ -1898,6 +1937,22 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
         )
 
+        # `[fragment_intensity]` (presence-only table) is the on/off switch
+        # for actually feeding the cache above into search -- without this
+        # gate, threading `P.fragment_intensity_for_sage`/
+        # `P.predicted_fragment_intensity` into `run_sage` unconditionally
+        # would make *every* sage job transitively depend on
+        # `predict_fragment_intensity`, breaking its own documented
+        # "never runs just because `dumped_peptides` exists" invariant.
+        # Mirrors `"recalibration" in cfg`/`"rt"/"iim" in cfg.recalibration`'s
+        # own table-presence-as-flag convention.
+        if "fragment_intensity" in cfg:
+            _final_pass_fragment_intensity_index = P.fragment_intensity_for_sage
+            _final_pass_fragment_intensity_cache = P.predicted_fragment_intensity
+        else:
+            _final_pass_fragment_intensity_index = None
+            _final_pass_fragment_intensity_cache = None
+
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
                 write_recalibration_precursor_selection_config(
@@ -2145,6 +2200,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.sage_binary,
                     P.predicted_rt,
                     P.predicted_iim,
+                    _final_pass_fragment_intensity_index,
+                    _final_pass_fragment_intensity_cache,
                 )
             else:
                 (
@@ -2159,6 +2216,10 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.fasta,
                     P.recalibrated_sage_config,
                     P.sage_binary,
+                    None,
+                    None,
+                    _final_pass_fragment_intensity_index,
+                    _final_pass_fragment_intensity_cache,
                 )
                 final_precursors = P.recalibrated_precursors
 
@@ -2203,6 +2264,10 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fasta,
                 P.sage_config,
                 P.sage_binary,
+                None,
+                None,
+                _final_pass_fragment_intensity_index,
+                _final_pass_fragment_intensity_cache,
             )
             P.confident_psms = filter_sage_results(
                 P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
@@ -2222,8 +2287,29 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.pseudomsms_config,
             )
 
+        # getattr, not `P.predicted_rt` directly -- the non-recalibration
+        # branch above never binds these labels at all (only the
+        # recalibration branch's own rt/iim sub-blocks do, each `None` when
+        # that dimension is inactive), and `Pipeline.__getattr__` raises
+        # `AttributeError` for an unbound label, not a Python-level
+        # default. `rt_source`/`iim_source` "external" exactly when that
+        # dimension's real external-prediction Node exists for this job --
+        # see `plans/mokapot_leakage_safe_pin.md`.
+        # `[mokapot].plugin` (optional, e.g. `plugin = "xgboost"`) -- unlike
+        # the sagepy_rescore branch below (always xgboost, unrelated call),
+        # this call site's model choice is config-driven so a job can pick
+        # mokapot's own default (linear SVM) or xgboost.
         P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
-            P, P.sage_results_pin
+            P,
+            P.sage_results_pin,
+            # "" (not None) when unset -- necroflow's dependency-provenance
+            # recording can't serialize a bare `None` scalar kwarg value to
+            # TOML; "" is falsy in `_mokapot_command`'s own `if
+            # args.config.plugin` check, so the effect (no --plugin flag,
+            # mokapot's own default model) is identical.
+            plugin=(cfg.mokapot.get("plugin", "") if "mokapot" in cfg else ""),
+            rt_source=("external" if getattr(P, "predicted_rt", None) is not None else "none"),
+            iim_source=("external" if getattr(P, "predicted_iim", None) is not None else "none"),
         )
 
         if "sagepy_rescore" in cfg:

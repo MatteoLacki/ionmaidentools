@@ -382,3 +382,110 @@ real, not just dry-run/import-checked.
   the one exception to "never patched", added because FragPipe/Philosopher has no
   generate-decoys-at-search-time option (unlike Sage) and there's no CLI override flag
   for it.
+
+## Fragment-intensity cache wired into `run_sage`, `[fragment_intensity]` gate (2026-08-31)
+
+`export_fragment_intensity_for_sage`/`predict_fragment_intensity` (see their own
+docstrings above) had no downstream consumer until now — the Rust-side reader
+(`software/sage/devel_fixed`'s `--predicted-fragment-intensity-index`/
+`-cache`, MSBooster-parity `ms2_*` features) existed but nothing in this
+pipeline ever passed those flags, so every job's `ms2_*` PIN/TSV columns were
+real column shapes computing on empty input — all `0.0`, verified directly on
+real F9477 output before this change.
+
+`run_sage` gained two more optional mixed Node/`None` inputs,
+`predicted_fragment_intensity_index: FragmentIntensityForSage | None`/
+`predicted_fragment_intensity_cache: FragmentIntensityCache | None`, both-or-
+neither (mirrors Rust's own `Input::build()` validation). `_run_sage_command`
+passes `--predicted-fragment-intensity-cache
+{cache_node}/arrays.mmappet` — the Rust reader only ever wants the shared
+cache directory's `arrays.mmappet` subdirectory, never `index.sqlite3`/
+`write.lock`.
+
+**Gated by a new `[fragment_intensity]` presence-only config table**, computed
+once (`_final_pass_fragment_intensity_index`/`_cache`, `None`/`None` when the
+table is absent) and threaded into all three *final*-pass `run_sage` call
+sites (mode-1 no-recalibration, mode-2 mz-only, mode-3 rt/iim) — never the
+calibration-anchor pass. Without this gate, threading the cache in
+unconditionally would make every sage job transitively depend on
+`predict_fragment_intensity`, breaking that rule's own documented "never runs
+just because `dumped_peptides` exists" invariant. Same table-presence-as-flag
+convention as `[recalibration.rt]`/`[recalibration.iim]`.
+
+**Positional, not keyword, gotcha**: these two params are Node-shaped (mixed
+Node/`None`) inputs, so necroflow's `Rule._validate_input_presence` requires
+them passed *positionally* like `predicted_rt`/`predicted_iim` — passing them
+as `keyword=` args (as a first attempt at the mode-1/mode-2 call sites did)
+raises `TypeError: run_sage: unexpected inputs: [...]` at pipeline-factory
+time, since necroflow classifies each rule input as strictly one or the other
+class based on its type annotation (`_node_input_contract` returning
+non-`None`), never both. When `predicted_rt`/`predicted_iim` also need to be
+`None` at a call site that isn't mode-3 (to reach the trailing positional
+fragment-intensity args), pass literal `None, None` positionally — passing an
+explicit `None` for a mixed Node/`None` **positional** input is fine and
+already exercised elsewhere (mode-3's single-dimension-active branches); only
+plain scalar (`_kw_inputs`) config values can't safely be `None` (see below).
+
+## `[mokapot].plugin`: config-driven model choice, not hardcoded (2026-08-31)
+
+The plain-SAGE `mokapot(...)` call site's `plugin` kwarg used to be a hardcoded
+`"xgboost"` literal. Now `cfg.mokapot.get("plugin", "") if "mokapot" in cfg
+else ""` — a job can select `[mokapot] plugin = "xgboost"` or omit the table
+entirely for mokapot's own default (linear SVM) model. The sagepy_rescore
+branch's own separate `mokapot(...)` call is untouched, still always
+`plugin="xgboost"` (unrelated call, no config knob added there).
+
+**`""`, never `None`, for "no plugin" — necroflow can't serialize a bare
+`None` scalar (`_kw_inputs`) value.** `plugin`/`rt_source`/`iim_source` are
+plain `str | None`-typed scalar rule params, not Node-shaped, so they're
+recorded verbatim in `dependencies.toml` (tomlkit-serialized) for provenance
+whenever a call site actually passes the keyword (even a value that happens
+to equal the Python-level default) — a real, explicit `None` there raises
+`tomlkit.items._ConvertError: Invalid type <class 'NoneType'>` and crashes
+the whole run *after* the underlying work (e.g. a real mokapot fit) already
+completed. Found via a real 2x2x3 ablation grid job (the first time this
+call site's `plugin` was ever computed as `None` instead of always
+`"xgboost"`). `""` is falsy in `_mokapot_command`'s own `if
+args.config.plugin` check, so the emitted command is identical (`--plugin`
+flag omitted) — only the provenance-recording path differs.
+
+## Leakage-safe mokapot PIN filtering (2026-08-31)
+
+See `plans/mokapot_leakage_safe_pin.md` for the full design. Summary: SAGE's
+raw `results.sage.pin` contains `posterior_error` (SAGE's own in-run,
+label-conditioned LDA score) — feeding it to mokapot as a feature is real
+leakage. `scripts/mokapot_pin_adapter.py --mode sage` projects the PIN down to
+a fixed, hardcoded-safe column registry via DuckDB before mokapot ever sees
+it; `--mode passthrough` (unchanged original behavior, just drops `FileName`)
+still serves the sagepy_rescore branch's already-filtered PIN. `mokapot()`
+gained `rt_source`/`iim_source: str | None = None` (kw_inputs, selects which
+external-prediction column pair — if any — the safe-PIN filter includes;
+`"external"` exactly when that dimension's real predicted-property Node
+exists for this job, `"none"` otherwise) threaded through
+`_mokapot_command`'s existing Python-callback pattern.
+
+## Real F9477 measurements: mode-3 + fragment-intensity + mokapot (2026-08-31)
+
+Full 2x2x3 ablation grid (`jobs/f9477_ablation/`: RT+IIM on/off x
+fragment-intensity on/off x mokapot {off, default, xgboost}), all against the
+same F9477 raw data, sharing one node store (IM2Deep/Chronologer/the
+fragment-intensity cache reused across every combo, no recompute). Real
+1%-FDR "ions" (distinct `(peptide, charge)`, `searchops`'s own definition):
+
+| RT-IIM | intensity | mokapot | ions |
+|---|---|---|---|
+| off | off | off (SAGE own) | 21,873 |
+| off | on | off (SAGE own) | 21,873 |
+| on | off | off (SAGE own) | 22,500 |
+| on | on | off (SAGE own) | 22,500 |
+| on | on | default | 31,710 |
+| **on** | **on** | **xgboost** | **32,088** |
+
+SAGE's own native ranking/eviction is completely blind to the
+fragment-intensity features (identical SAGE-own numbers with intensity on vs
+off, both RT-IIM settings) — the entire intensity gain flows through
+mokapot's learned model, never SAGE's own score. Best combination found:
+RT+IIM + fragment-intensity + mokapot(xgboost), 32,088 ions — beats every
+previously-recorded number for this dataset (old `ranking_score`-focused best
+was 25,409 ions, RT-only, no mokapot, no real fragment-intensity signal —
+see `software/sage/devel_fixed`'s `CLAUDE.md`).
