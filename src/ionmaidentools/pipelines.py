@@ -452,20 +452,24 @@ class PredictedIim(NodeType):
 
 
 class NoPrediction(NodeType):
-    """Zero-cost sentinel standing in for `PredictedRt`/`PredictedIim`
-    (and `RtTolerance`/`MobilityTolerance`) when that dimension isn't
-    active (`[recalibration.rt]`/`[recalibration.iim]` absent, 2026-08-25 --
-    see the pipeline factory) -- necroflow requires every `NodeType`-typed
-    rule input to be a real DAG edge (no true-optional input exists, and
-    `NodeType`-typed inputs can't carry Python defaults either), so
-    `run_sage_with_predicted`/`update_sage_config_rt_iim` always take both
-    RT and IIM params; this stands in for whichever one wasn't computed.
+    """Zero-cost sentinel standing in for `RtTolerance`/`MobilityTolerance`
+    when that dimension isn't active (`[recalibration.rt]`/
+    `[recalibration.iim]` absent, 2026-08-25 -- see the pipeline factory).
+    `update_sage_config_rt_iim` always takes both RT and IIM
+    `rt_tolerance`/`mobility_tolerance` params (plain required `NodeType`s,
+    not mixed Node/`None`); this stands in for whichever one wasn't
+    computed. `run_sage`'s `predicted_rt`/`predicted_iim` used to need this
+    too (`run_sage_with_predicted`, before necroflow's "mixed Node/value
+    inputs" support) but no longer do -- `run_sage` now takes a true
+    `PredictedRt | None`/`PredictedIim | None`, no sentinel required
+    (2026-08-26). Only `update_sage_config_rt_iim`'s inputs still need this
+    sentinel -- out of scope for that merge, see `run_sage`'s docstring.
     (necroflow *does* support skipping a rule entirely via plain `if/else`
     branching in the pipeline factory -- see its `docs/rules.md`'s
     "Conditional pipelines" -- but here RT/IIM are independently optional,
-    so properly avoiding this sentinel would mean up to 3 separate
-    `run_sage_with_predicted`/`update_sage_config_rt_iim` rule variants
-    instead of one with a Python-callback command; not done yet, see
+    so properly avoiding this sentinel too would mean up to 3 separate
+    `update_sage_config_rt_iim` rule variants instead of one with a
+    Python-callback command; not done yet, see
     plans/rt_iim_independent_dimensions.md.) A `@text_file` rule with zero
     `NodeType` inputs and a fixed literal `text` default -- same
     fingerprint every time, so it materializes once and every call site
@@ -1017,22 +1021,65 @@ def dump_peptides(
     return peptides
 
 
-@command(
-    "{sage_binary} --version"
-    " && {sage_binary} -f {fasta} --annotate-matches --write-pin"
-    " --output_directory {workdir} --pmsms {pmsms} --precursors {precursors}"
-    " {sage_config}"
-    " && test -f {results_json} && test -f {results_pin}"
-    " && test -f {results_tsv} && test -f {matched_fragments}",
-    threads=CORES,
-)
+def _run_sage_command(args: CommandArgs) -> str:
+    """Python command callback, not a static template -- lets
+    `--predicted-rt`/`--predicted-iim` be added independently, purely by
+    whether `predicted_rt`/`predicted_iim` resolved to a real Node or the
+    mixed Node/`None` input's `None` default (necroflow's "mixed Node/value
+    inputs" support, added 2026-08-21) -- `args.inputs.*` preserves a plain
+    `None` verbatim (only managed Nodes resolve to `Path`), so this needs
+    neither a separate `dimensions` scalar nor the `NoPrediction` sentinel
+    `run_sage_with_predicted` used to require just to keep the parameter a
+    real DAG edge. One rule now covers pass-1/mode-1/mode-2 (neither
+    prediction) and mode 3's final pass (either/both), replacing the
+    previous `run_sage`/`run_sage_with_predicted` split. See
+    plans/rt_iim_independent_dimensions.md for the split this undoes.
+    """
+    sage_binary = shlex.quote(str(args.inputs.sage_binary))
+    fasta = shlex.quote(str(args.inputs.fasta))
+    pmsms = shlex.quote(str(args.inputs.pmsms))
+    precursors = shlex.quote(str(args.inputs.precursors))
+    sage_config = shlex.quote(str(args.inputs.sage_config))
+    workdir = shlex.quote(str(args.workdir))
+    results_json = shlex.quote(str(args.outputs.results_json))
+    results_pin = shlex.quote(str(args.outputs.results_pin))
+    results_tsv = shlex.quote(str(args.outputs.results_tsv))
+    matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
+
+    flags = ""
+    if args.inputs.predicted_rt is not None:
+        flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
+    if args.inputs.predicted_iim is not None:
+        flags += f" --predicted-iim {shlex.quote(str(args.inputs.predicted_iim))}"
+
+    return (
+        f"{sage_binary} --version && {sage_binary} -f {fasta}"
+        f" --annotate-matches --write-pin --output_directory {workdir}"
+        f" --pmsms {pmsms} --precursors {precursors}{flags} {sage_config}"
+        f" && test -f {results_json} && test -f {results_pin}"
+        f" && test -f {results_tsv} && test -f {matched_fragments}"
+    )
+
+
+@command(_run_sage_command, threads=CORES)
 def run_sage(
     pmsms: Pmsms,
     precursors: PreSageFilteredPrecursors,
     fasta: Fasta,
     sage_config: SageConfig,
     sage_binary: SageBinary,
+    predicted_rt: PredictedRt | None = None,
+    predicted_iim: PredictedIim | None = None,
 ):
+    """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
+    Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
+    passed as real Nodes for whichever dimension mode 3 has active.
+    `sage_config` must already carry `rt_tol_sec`+`rt_sigma_sec` and/or
+    `mobility_tol`+`iim_sigma` for whichever dimensions are passed here
+    (`update_sage_config_rt_iim`), same requirement `Input::build()`
+    enforces Rust-side. See plans/better_sage_filtering.md's B.4-B.6 and
+    plans/rt_iim_independent_dimensions.md.
+    """
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
     results_tsv = output(SageResultsTsv)
@@ -1079,74 +1126,6 @@ def _server_url_arg(value: str | list[str] | None, default: str) -> str:
     return ",".join(value)
 
 
-def _run_sage_with_predicted_command(args: CommandArgs) -> str:
-    """Python command callback, not a static template -- lets
-    `--predicted-rt`/`--predicted-iim` be added independently based on
-    `args.config.dimensions` (RT/IIM independently optional). `predicted_rt`/
-    `predicted_iim` are always real DAG edges (necroflow requires it --
-    no true-optional `NodeType` input exists) but resolve to the free
-    `NoPrediction` sentinel, not a real prediction file, when their
-    dimension is excluded; the decision of which `--predicted-*` flags to
-    emit is driven by the scalar `dimensions` config, not by inspecting
-    which type actually resolved (`args.inputs.*` only exposes resolved
-    `Path`s, no type info -- see `contexts.CommandArgs`). See
-    plans/rt_iim_independent_dimensions.md.
-    """
-    sage_binary = shlex.quote(str(args.inputs.sage_binary))
-    fasta = shlex.quote(str(args.inputs.fasta))
-    pmsms = shlex.quote(str(args.inputs.pmsms))
-    precursors = shlex.quote(str(args.inputs.precursors))
-    sage_config = shlex.quote(str(args.inputs.sage_config))
-    workdir = shlex.quote(str(args.workdir))
-    results_json = shlex.quote(str(args.outputs.results_json))
-    results_pin = shlex.quote(str(args.outputs.results_pin))
-    results_tsv = shlex.quote(str(args.outputs.results_tsv))
-    matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
-
-    dimensions = set(args.config.dimensions)
-    flags = ""
-    if "rt" in dimensions:
-        flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
-    if "iim" in dimensions:
-        flags += f" --predicted-iim {shlex.quote(str(args.inputs.predicted_iim))}"
-
-    return (
-        f"{sage_binary} --version && {sage_binary} -f {fasta}"
-        f" --annotate-matches --write-pin --output_directory {workdir}"
-        f" --pmsms {pmsms} --precursors {precursors}{flags} {sage_config}"
-        f" && test -f {results_json} && test -f {results_pin}"
-        f" && test -f {results_tsv} && test -f {matched_fragments}"
-    )
-
-
-@command(_run_sage_with_predicted_command, threads=CORES)
-def run_sage_with_predicted(
-    pmsms: Pmsms,
-    precursors: PreSageFilteredPrecursors,
-    fasta: Fasta,
-    sage_config: SageConfig,
-    sage_binary: SageBinary,
-    predicted_rt: PredictedRt | NoPrediction,
-    predicted_iim: PredictedIim | NoPrediction,
-    dimensions: tuple[str, ...],
-):
-    """Same as `run_sage`, plus `--predicted-rt`/`--predicted-iim`, each
-    independently included based on `dimensions` -- a distinct rule rather
-    than a conditional flag on `run_sage` itself, since `run_sage` is also
-    pass-1's rule (unrelated to predictions, shouldn't carry sentinel-node
-    wiring every call site would otherwise need). Only used for mode 3
-    (mz + RT and/or IIM recalibration)'s final pass -- `sage_config` must
-    already have `rt_tol_sec`/`mobility_tol` set for whichever dimensions
-    are active (`update_sage_config_rt_iim`), same requirement
-    `Input::build()` enforces Rust-side. See
-    plans/better_sage_filtering.md's B.4-B.6 and
-    plans/rt_iim_independent_dimensions.md.
-    """
-    results_json = output(SageResultsJson)
-    results_pin = output(SageResultsPin)
-    results_tsv = output(SageResultsTsv)
-    matched_fragments = output(SageMatchedFragments)
-    return results_json, results_pin, results_tsv, matched_fragments
 
 
 @command(
@@ -1247,10 +1226,12 @@ def correct_precursors_iim(
 
 def _update_sage_config_rt_iim_command(args: CommandArgs) -> str:
     """Python command callback -- chains 0, 2, or 4 `config_set` calls
-    based on `args.config.dimensions` (RT/IIM independently optional),
-    same reasoning as `_run_sage_with_predicted_command`: `rt_tolerance`/
-    `mobility_tolerance` are always real DAG edges (resolve to the
-    `NoPrediction` sentinel when inactive), but only the active
+    based on `args.config.dimensions` (RT/IIM independently optional).
+    Unlike `run_sage` (which now takes `predicted_rt`/`predicted_iim` as
+    true mixed Node/`None` inputs, no sentinel needed), `rt_tolerance`/
+    `mobility_tolerance` here are still always real DAG edges (resolve to
+    the `NoPrediction` sentinel when inactive) -- out of scope for the
+    2026-08-26 `run_sage` merge, see that function's docstring. Only the active
     dimension's `config_set` calls actually run -- decided by the scalar
     `dimensions` config, never by inspecting file content. In practice
     `dimensions` is never empty here (the pipeline factory only calls this
@@ -1317,8 +1298,8 @@ def update_sage_config_rt_iim(
     `recalibrated_sage_config`, not the plain `write_sage_config` output.
     `--predicted-rt`/`--predicted-iim` themselves are *not* set here: like
     `--pmsms`/`--precursors`/`-f {fasta}`, they're path-valued overrides
-    passed directly as CLI flags (`run_sage_with_predicted`), not embedded
-    into the config JSON via `config_set`."""
+    passed directly as CLI flags (`run_sage`), not embedded into the
+    config JSON via `config_set`."""
     recalibrated_sage_config = output(SageConfig)
     return recalibrated_sage_config
 
@@ -1874,10 +1855,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 # per-precursor charges instead -- this must not crash on
                 # that, and should match SAGE's real default when it does.
                 default_precursor_charge = cfg.sage.get("precursor_charge", (2, 4))
-                # Downstream rules (run_sage_with_predicted,
-                # update_sage_config_rt_iim) still take `dimensions` as a
+                # update_sage_config_rt_iim still takes `dimensions` as a
                 # scalar tuple -- computed here from table presence, not
-                # read from config.
+                # read from config. `run_sage` no longer needs it
+                # (2026-08-26): whether `predicted_rt`/`predicted_iim`
+                # resolved to a real Node or `None` is itself the signal.
                 dimensions = tuple(d for d in ("rt", "iim") if d in cfg.recalibration)
 
                 # tolerance_percentiles/tolerance_method: required explicitly
@@ -1911,7 +1893,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                         fdr=cfg.sage_summarize.fdr,
                     )
                 else:
-                    P.predicted_rt = write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+                    # Plain Python `None`, not a `NoPrediction` sentinel node
+                    # -- `run_sage`'s `predicted_rt` is a true mixed
+                    # Node/`None` input now (2026-08-26), so there's no DAG
+                    # edge to satisfy when this dimension is inactive.
+                    P.predicted_rt = None
 
                 if "iim" in dimensions:
                     # min_charge/max_charge are IIM-specific (RT has no
@@ -1940,7 +1926,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                         fdr=cfg.sage_summarize.fdr,
                     )
                 else:
-                    P.predicted_iim = write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+                    P.predicted_iim = None
 
                 # Chained, not recombined: correct_precursors_iim's
                 # mz_corrected_precursors input becomes correct_precursors_rt's
@@ -1993,8 +1979,12 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 # update_sage_config_rt_iim needs a real RtTolerance/
                 # MobilityTolerance for whichever dimension's correction
                 # ran (tighter, post-correction fit) -- the sentinel for
-                # whichever dimension is inactive, matching
-                # predicted_rt/predicted_iim's own fallback above.
+                # whichever dimension is inactive. Unlike predicted_rt/
+                # predicted_iim above, update_sage_config_rt_iim's
+                # rt_tolerance/mobility_tolerance inputs are still plain
+                # required NodeTypes, not mixed Node/None -- out of scope
+                # for the 2026-08-26 run_sage merge (see that function's
+                # docstring), so the sentinel stays here.
                 P.precursor_correction_rt_tolerance = (
                     precursor_correction_rt_tolerance
                     if precursor_correction_rt_tolerance is not None
@@ -2018,7 +2008,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.sage_results_pin,
                     P.sage_results_tsv,
                     P.sage_matched_fragments,
-                ) = run_sage_with_predicted(
+                ) = run_sage(
                     P,
                     P.recalibrated_mz_pmsms,
                     final_precursors,
@@ -2027,7 +2017,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.sage_binary,
                     P.predicted_rt,
                     P.predicted_iim,
-                    dimensions=dimensions,
                 )
             else:
                 (
