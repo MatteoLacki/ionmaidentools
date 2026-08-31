@@ -92,6 +92,44 @@ This node has no downstream consumer and does not replace `ms2_events` or
 TOF and frame headers locate the narrow ranges without expanding scan IDs. F9477
 completed in 5.07 s and 1.554 GB, with all 160,689,740 events matching TSF exactly.
 
+## Fragment-intensity prediction cache: this repo's first `mutable=True` rule (2026-08-31)
+
+`predict_fragment_intensity` wraps `git/featureprediction`'s
+`feature-prediction-generate-fragments` (see that repo's `AI.md` for the
+Prosit/`compact_trt` predictor itself and the cache's own internal shape).
+Independently requestable (same pattern as `ms2_tsf_events`/`ms2_tfs_events`
+above) off `dumped_peptides` — never runs just because a job dumps peptides,
+since a full human-proteome fill is a real, expensive, network-bound
+operation (~43 minutes against the live Koina server measured on F9477).
+
+**Its output (`FragmentIntensityCache`) is declared `mutable=True`** —
+necroflow's own mechanism for "persistent single-output state whose external
+byte changes should not invalidate consumers" (`git/necroflow`'s
+`docs/rules.md`, "Mutable Rules"). This is the first use of that feature in
+this repo. It exists because the underlying cache
+(`mmappeteer.PredictionCache`) is deliberately append-only and growing
+across runs — `feature_prediction.fragment_intensity.predict_fragment_intensity`
+does `cache.lookup()` before ever calling Koina, so a rerun against the same
+node only fills in genuinely missing keys. Without `mutable=True`, that
+growth between runs would be indistinguishable from "this output changed,
+re-run everything downstream" to a normal (immutable, content-addressed)
+necroflow node — exactly the semantics this feature exists to opt out of.
+Real effect verified: the cache was first populated (a real full-F9477
+fill, ~2.8GB) by a standalone script, then moved by hand into this node's
+exact hash directory. The first real `necroflow run` invocation of
+`predict_fragment_intensity` against that pre-populated cache (necroflow's
+own summary: `1 completed, 4 skipped (up-to-date)`) still had to run
+(this was its first-ever necroflow-tracked invocation, so it can't be
+skipped), but completed in 131.9s — dominated entirely by the cache's own
+bulk SQLite lookup over 16.87M keys, confirming the underlying Python
+function's lookup-before-append logic made zero Koina calls against
+already-cached data.
+
+No downstream consumer yet (SAGE doesn't read this cache) — that's the next
+piece of `plans/sage_features_on_while_searching.md`, not done here. See
+`plans/fragment_intensity_cache.md` for the cache's own design (predictor
+choice, slot-numbering scheme, dtype choices).
+
 ## Recalibration: three independently selectable modes (B.6, 2026-08-20; gating simplified 2026-08-25)
 
 `ionmaiden_pipeline`'s `if "sage" in cfg:` branch has three modes. Each of

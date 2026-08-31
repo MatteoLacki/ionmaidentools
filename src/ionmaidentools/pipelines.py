@@ -451,6 +451,21 @@ class PredictedIim(NodeType):
     filename = "predicted_iim.parquet"
 
 
+class FragmentIntensityCache(NodeType):
+    """`mmappeteer.PredictionCache` directory from `git/featureprediction`'s
+    `fragment_intensity.py` -- append-only, growing across every real
+    (non-forced) rerun of `predict_fragment_intensity` with the same
+    inputs (lookup-before-append: a rerun makes no duplicate Koina calls
+    for keys already cached). Its producer rule is `mutable=True`
+    (necroflow's own "persistent single-output state whose external byte
+    changes should not invalidate consumers" mechanism, `docs/rules.md`'s
+    "Mutable Rules") specifically so that the cache growing between runs
+    never stales anything downstream, and its workdir is exempt from
+    necroflow's autoclean. See `plans/fragment_intensity_cache.md`."""
+
+    filename = "fragment_intensity_cache"
+
+
 class NoPrediction(NodeType):
     """Zero-cost sentinel standing in for `RtTolerance`/`MobilityTolerance`
     when that dimension isn't active (`[recalibration.rt]`/
@@ -1019,6 +1034,46 @@ def dump_peptides(
 ):
     peptides = output(DumpedPeptides)
     return peptides
+
+
+# Duplicated from `git/featureprediction`'s `fragment_intensity` module --
+# can't import across venvs (same reasoning as `_DEFAULT_KOINA_*_SERVER_URL`
+# above). Not yet exposed as job config: no real job has needed a different
+# value, and `DEFAULT_COLLISION_ENERGY` is already documented as a
+# placeholder, not a measured value -- see that repo's AI.md.
+_DEFAULT_FRAGMENT_COLLISION_ENERGY = 30.0
+_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE = "HCD"
+
+
+@command(
+    "venvs/featureprediction/bin/feature-prediction-generate-fragments"
+    " {dumped_peptides} {fragment_intensity_cache}"
+    " --min-charge {min_charge} --max-charge {max_charge}"
+    " --collision-energy {collision_energy} --fragmentation-type {fragmentation_type}",
+    mutable=True,
+)
+def predict_fragment_intensity(
+    dumped_peptides: DumpedPeptides,
+    min_charge: int,
+    max_charge: int,
+    collision_energy: float,
+    fragmentation_type: str,
+):
+    """Populate the persistent fragment-intensity `PredictionCache` for
+    `dumped_peptides`' sequences x `[min_charge, max_charge]`.
+    `mutable=True` (see `FragmentIntensityCache`'s docstring): the cache
+    grows in place across reruns with the same inputs rather than
+    starting fresh each time, and its workdir is exempt from autoclean.
+    Independently requestable (like `ms2_tsf_events`/`ms2_tfs_events`) --
+    no downstream consumer in the DAG yet (SAGE doesn't read this cache),
+    and it's a real, expensive, network-bound operation (a full
+    human-proteome fill took ~43 minutes against the live Koina server),
+    so it must never run just because `dumped_peptides` exists -- only
+    when explicitly requested via `.requests`. See
+    `plans/fragment_intensity_cache.md`.
+    """
+    fragment_intensity_cache = output(FragmentIntensityCache)
+    return fragment_intensity_cache
 
 
 def _run_sage_command(args: CommandArgs) -> str:
@@ -1768,6 +1823,20 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         )
         P.dumped_peptides = dump_peptides(
             P, P.fasta, P.dump_peptides_config, P.dump_peptides_binary
+        )
+
+        # Independently requestable (see `predict_fragment_intensity`'s
+        # docstring) -- min_charge/max_charge mirror the same
+        # cfg.sage.precursor_charge-or-SAGE's-own-(2,4)-default derivation
+        # `[recalibration.iim]` uses below, computed here too since this
+        # runs unconditionally (not nested inside `"recalibration" in cfg`).
+        P.predicted_fragment_intensity = predict_fragment_intensity(
+            P,
+            P.dumped_peptides,
+            min_charge=cfg.sage.get("precursor_charge", (2, 4))[0],
+            max_charge=cfg.sage.get("precursor_charge", (2, 4))[1],
+            collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
+            fragmentation_type=_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE,
         )
 
         if "recalibration" in cfg:
