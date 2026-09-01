@@ -168,3 +168,38 @@ config doesn't set it.
 was added at the pipeline-config level so far; those four are available at
 the CLI/`feature_prediction.predict` config-dict level today, add them here
 the same way if a job actually needs to set one.
+
+## Mode-2/mode-3 branches flattened into one (2026-09-0x)
+
+The `if "rt" in cfg.recalibration or "iim" in cfg.recalibration: <block>
+else: <block>` split (what this file used to call "mode 2" vs "mode 3") no
+longer exists as two separate code paths with two separate final `run_sage`
+calls. RT and IIM are now independent sibling `if "rt" in dimensions:`/
+`if "iim" in dimensions:` blocks at the same nesting level as the rest of
+the `"recalibration" in cfg` branch, and there is exactly **one** final
+`run_sage` call regardless of which of RT/IIM (zero, one, or both) are
+active.
+
+This was unlocked by `update_sage_config_rt_iim`'s own command builder
+already supporting `dimensions=()` as a documented safe no-op (a plain `cp
+{sage_config} {recalibrated_sage_config}`, per its own docstring, written
+back when `dimensions` was assumed non-empty "in practice" but handled as a
+safe fallback anyway) — so calling it unconditionally, even when neither
+dimension is active, produces byte-identical config content to what
+"mode 2" used to produce directly from `update_sage_config`'s output.
+Verified on a real job: the realized `sage_config.json` for a mode-2 job
+diffed byte-for-byte identical (modulo path strings) between the old
+two-branch code and the new unified code, and real ion/PSM counts at 1%
+FDR matched exactly (75,888 PSMs / 21,873 ions on the same F9477 job).
+
+One real, one-time cost: every existing "mode 2" job's final `run_sage`
+node gets a new hash the first time it runs after this change (its input,
+`recalibrated_sage_config_rt_iim`, didn't exist as a concept for that mode
+before), even though the config bytes are identical — a single cheap
+`update_sage_config_rt_iim` node plus one `run_sage` rerun, not a
+correctness concern.
+
+The repeated `confident_psms → sage_pmsms_mapping → score_comparison`
+trio (previously written out once per branch) is now one
+`_finalize_confident_psms` closure inside `ionmaiden_pipeline`, called from
+both the no-recalibration and recalibration code paths.

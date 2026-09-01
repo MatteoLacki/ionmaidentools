@@ -2034,6 +2034,32 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             _final_pass_fragment_intensity_index = None
             _final_pass_fragment_intensity_cache = None
 
+        def _finalize_confident_psms(search_precursors, mz_pmsms, search_pmsms):
+            """confident_psms -> sage_pmsms_mapping -> score_comparison, the
+            same three calls needed after any final `run_sage` call
+            (mode-1/2/3 alike, see `recalibration_modes.md`) -- only which
+            precursors/pmsms Nodes get passed differs: raw `search_*` Nodes
+            when there's no recalibration at all, the recalibrated ones
+            otherwise. Kept as a plain closure over `P`/`cfg`, not a new
+            necroflow rule -- it only groups three existing rule calls."""
+            P.confident_psms = filter_sage_results(
+                P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+            )
+            P.sage_pmsms_mapping = sage_map_to_pmsms(
+                P,
+                P.confident_psms,
+                P.sage_matched_fragments,
+                search_precursors,
+                mz_pmsms,
+            )
+            P.score_comparison = score_comparison(
+                P,
+                search_precursors,
+                search_pmsms,
+                P.sage_pmsms_mapping,
+                P.pseudomsms_config,
+            )
+
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
                 write_recalibration_precursor_selection_config(
@@ -2090,24 +2116,76 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P, P.sage_config, P.precursor_mz_search_tolerance, P.fragment_mz_search_tolerance,
             )
 
-            # Mode 3 (mz + RT + IIM) nests inside mode 2 (mz alone) since it
-            # chains onto mz's already-corrected outputs -- gated by RT/IIM
-            # table presence so mode 2 stays the default when neither is
-            # configured, not silently upgraded. See
-            # plans/better_sage_filtering.md's B.6.
-            #
-            # RT and IIM are independently active based on whether their own
-            # table exists (2026-08-25) -- mirrors mz's own existing pattern
-            # (`"recalibration" in cfg` means mz correction is on, no
-            # separate flag needed). No more `[recalibration.rt_iim]`
-            # umbrella table or `dimensions` key: that config shape read as
-            # "both RT and IIM" by name while actually meaning "the RT/IIM
-            # subsystem in general," which was confusing (its `dimensions`
-            # sub-list is exactly redundant with per-dimension table
-            # presence -- carrying the same fact in two places). See
-            # plans/rt_iim_independent_dimensions.md for the original design
-            # this simplifies.
-            if "rt" in cfg.recalibration or "iim" in cfg.recalibration:
+            # RT and IIM are independent, sibling optional steps, each gated
+            # purely on its own `[recalibration.rt]`/`.iim]` table presence
+            # (2026-08-25 rationale -- mirrors mz's own `"recalibration" in
+            # cfg` pattern, no separate flag needed; see
+            # plans/rt_iim_independent_dimensions.md). `dimensions` may end
+            # up empty (neither active -- previously called "mode 2") --
+            # `update_sage_config_rt_iim` below tolerates that as a
+            # documented safe copy-through (its own command builder's
+            # docstring), so mz-only and RT/IIM-active jobs share the same
+            # single final `run_sage` call below instead of two
+            # near-duplicate branches (2026-09-0x flattening; original
+            # two-branch design: plans/better_sage_filtering.md's B.6).
+            dimensions = tuple(d for d in ("rt", "iim") if d in cfg.recalibration)
+
+            # tolerance_percentiles/tolerance_method: required explicitly in
+            # `[recalibration.rt]`/`[recalibration.iim]` (separate tables,
+            # 2026-08-25) -- never inherited from `cfg.recalibration`'s own
+            # (mz-scoped) `[recalibration.mz]` value; each of the three
+            # dimensions (mz, rt, iim) gets its own percentiles/method. See
+            # `git/featureprediction`'s `tolerance.select_tolerance`.
+            precursor_correction_rt_tolerance = None
+            precursor_correction_mobility_tolerance = None
+            precursors_for_iim_correction = P.recalibrated_precursors
+            final_precursors = P.recalibrated_precursors
+
+            if "rt" in dimensions:
+                rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt["tolerance_percentiles"]
+                rt_tolerance_method = cfg.recalibration.rt.get("tolerance_method", "theoretic")
+                rt_server_url = _server_url_arg(
+                    cfg.recalibration.rt.get("server_url"), _DEFAULT_KOINA_HTTP_SERVER_URL
+                )
+                P.rt_prediction_cache = fill_rt_prediction_cache(
+                    P, P.dumped_peptides, server_url=rt_server_url
+                )
+                P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
+                    P,
+                    P.dumped_peptides,
+                    P.filtered_sage_results_tsv,
+                    P.rt_prediction_cache,
+                    tolerance_lo=rt_tolerance_lo,
+                    tolerance_hi=rt_tolerance_hi,
+                    tolerance_method=rt_tolerance_method,
+                    server_url=rt_server_url,
+                    fdr=cfg.sage_summarize.fdr,
+                )
+                (
+                    P.rt_corrected_precursors,
+                    precursor_correction_rt_tolerance,
+                    P.precursor_correction_rt_model,
+                    P.precursor_correction_rt_fit_plot,
+                ) = correct_precursors_rt(
+                    P,
+                    P.filtered_sage_results_tsv,
+                    P.predicted_rt,
+                    P.recalibrated_precursors,
+                    tolerance_lo=rt_tolerance_lo,
+                    tolerance_hi=rt_tolerance_hi,
+                    tolerance_method=rt_tolerance_method,
+                    fdr=cfg.sage_summarize.fdr,
+                )
+                precursors_for_iim_correction = P.rt_corrected_precursors
+                final_precursors = P.rt_corrected_precursors
+            else:
+                # Plain Python `None`, not a `NoPrediction` sentinel node --
+                # `run_sage`'s `predicted_rt` is a true mixed Node/`None`
+                # input, so there's no DAG edge to satisfy when this
+                # dimension is inactive.
+                P.predicted_rt = None
+
+            if "iim" in dimensions:
                 # min_charge/max_charge: explicit `[recalibration.iim]`
                 # override if given, else mirror whatever charge range the
                 # SAGE run this feeds will itself search -- `cfg.sage`'s own
@@ -2119,202 +2197,112 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 # per-precursor charges instead -- this must not crash on
                 # that, and should match SAGE's real default when it does.
                 default_precursor_charge = cfg.sage.get("precursor_charge", (2, 4))
-                # update_sage_config_rt_iim still takes `dimensions` as a
-                # scalar tuple -- computed here from table presence, not
-                # read from config. `run_sage` no longer needs it
-                # (2026-08-26): whether `predicted_rt`/`predicted_iim`
-                # resolved to a real Node or `None` is itself the signal.
-                dimensions = tuple(d for d in ("rt", "iim") if d in cfg.recalibration)
-
-                # tolerance_percentiles/tolerance_method: required explicitly
-                # in `[recalibration.rt]`/`[recalibration.iim]` (separate
-                # tables, 2026-08-25 -- previously one shared
-                # `[recalibration.rt_iim].tolerance_percentiles` value for
-                # both dimensions, which made an asymmetric real-data finding
-                # for one dimension silently apply to the other too). Never
-                # inherited from `cfg.recalibration`'s own (mz-scoped)
-                # `[recalibration.mz]` value either -- each of the three
-                # dimensions (mz, rt, iim) gets its own percentiles/method,
-                # deliberately not shared just because the values happen to
-                # look similar. `tolerance_method`: `"theoretic"` (default,
-                # symmetric `median ± z*robust_sigma`) or `"empiric"` (plain
-                # percentiles) -- see `git/featureprediction`'s
-                # `tolerance.select_tolerance`.
-                if "rt" in dimensions:
-                    rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt["tolerance_percentiles"]
-                    rt_tolerance_method = cfg.recalibration.rt.get("tolerance_method", "theoretic")
-                    rt_server_url = _server_url_arg(
-                        cfg.recalibration.rt.get("server_url"), _DEFAULT_KOINA_HTTP_SERVER_URL
-                    )
-                    P.rt_prediction_cache = fill_rt_prediction_cache(
-                        P, P.dumped_peptides, server_url=rt_server_url
-                    )
-                    P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
-                        P,
-                        P.dumped_peptides,
-                        P.filtered_sage_results_tsv,
-                        P.rt_prediction_cache,
-                        tolerance_lo=rt_tolerance_lo,
-                        tolerance_hi=rt_tolerance_hi,
-                        tolerance_method=rt_tolerance_method,
-                        server_url=rt_server_url,
-                        fdr=cfg.sage_summarize.fdr,
-                    )
-                else:
-                    # Plain Python `None`, not a `NoPrediction` sentinel node
-                    # -- `run_sage`'s `predicted_rt` is a true mixed
-                    # Node/`None` input now (2026-08-26), so there's no DAG
-                    # edge to satisfy when this dimension is inactive.
-                    P.predicted_rt = None
-
-                if "iim" in dimensions:
-                    # min_charge/max_charge are IIM-specific (RT has no
-                    # charge dimension) -- live in `[recalibration.iim]`.
-                    rt_iim_min_charge = cfg.recalibration.iim.get(
-                        "min_charge", default_precursor_charge[0]
-                    )
-                    rt_iim_max_charge = cfg.recalibration.iim.get(
-                        "max_charge", default_precursor_charge[1]
-                    )
-                    iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim["tolerance_percentiles"]
-                    iim_tolerance_method = cfg.recalibration.iim.get("tolerance_method", "theoretic")
-                    iim_server_url = _server_url_arg(
-                        cfg.recalibration.iim.get("server_url"), _DEFAULT_KOINA_GRPC_SERVER_URL
-                    )
-                    P.iim_prediction_cache = fill_iim_prediction_cache(
-                        P,
-                        P.dumped_peptides,
-                        min_charge=rt_iim_min_charge,
-                        max_charge=rt_iim_max_charge,
-                        server_url=iim_server_url,
-                    )
-                    P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
-                        P,
-                        P.dumped_peptides,
-                        P.filtered_sage_results_tsv,
-                        P.iim_prediction_cache,
-                        min_charge=rt_iim_min_charge,
-                        max_charge=rt_iim_max_charge,
-                        tolerance_lo=iim_tolerance_lo,
-                        tolerance_hi=iim_tolerance_hi,
-                        tolerance_method=iim_tolerance_method,
-                        server_url=iim_server_url,
-                        fdr=cfg.sage_summarize.fdr,
-                    )
-                else:
-                    P.predicted_iim = None
-
+                rt_iim_min_charge = cfg.recalibration.iim.get(
+                    "min_charge", default_precursor_charge[0]
+                )
+                rt_iim_max_charge = cfg.recalibration.iim.get(
+                    "max_charge", default_precursor_charge[1]
+                )
+                iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim["tolerance_percentiles"]
+                iim_tolerance_method = cfg.recalibration.iim.get("tolerance_method", "theoretic")
+                iim_server_url = _server_url_arg(
+                    cfg.recalibration.iim.get("server_url"), _DEFAULT_KOINA_GRPC_SERVER_URL
+                )
+                P.iim_prediction_cache = fill_iim_prediction_cache(
+                    P,
+                    P.dumped_peptides,
+                    min_charge=rt_iim_min_charge,
+                    max_charge=rt_iim_max_charge,
+                    server_url=iim_server_url,
+                )
+                P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
+                    P,
+                    P.dumped_peptides,
+                    P.filtered_sage_results_tsv,
+                    P.iim_prediction_cache,
+                    min_charge=rt_iim_min_charge,
+                    max_charge=rt_iim_max_charge,
+                    tolerance_lo=iim_tolerance_lo,
+                    tolerance_hi=iim_tolerance_hi,
+                    tolerance_method=iim_tolerance_method,
+                    server_url=iim_server_url,
+                    fdr=cfg.sage_summarize.fdr,
+                )
                 # Chained, not recombined: correct_precursors_iim's
                 # mz_corrected_precursors input becomes correct_precursors_rt's
                 # own output when both dimensions are active, so a single
                 # final precursors table ends up with both corrections
                 # applied (RtCorrectedPrecursors is a RecalibratedPrecursors
                 # subclass, satisfies either call site's contract).
-                precursor_correction_rt_tolerance = None
-                precursor_correction_mobility_tolerance = None
-                precursors_for_iim_correction = P.recalibrated_precursors
-                final_precursors = P.recalibrated_precursors
-
-                if "rt" in dimensions:
-                    (
-                        P.rt_corrected_precursors,
-                        precursor_correction_rt_tolerance,
-                        P.precursor_correction_rt_model,
-                        P.precursor_correction_rt_fit_plot,
-                    ) = correct_precursors_rt(
-                        P,
-                        P.filtered_sage_results_tsv,
-                        P.predicted_rt,
-                        P.recalibrated_precursors,
-                        tolerance_lo=rt_tolerance_lo,
-                        tolerance_hi=rt_tolerance_hi,
-                        tolerance_method=rt_tolerance_method,
-                        fdr=cfg.sage_summarize.fdr,
-                    )
-                    precursors_for_iim_correction = P.rt_corrected_precursors
-                    final_precursors = P.rt_corrected_precursors
-
-                if "iim" in dimensions:
-                    (
-                        P.rt_iim_corrected_precursors,
-                        precursor_correction_mobility_tolerance,
-                        P.precursor_correction_iim_models,
-                        P.precursor_correction_iim_fit_plot,
-                    ) = correct_precursors_iim(
-                        P,
-                        P.filtered_sage_results_tsv,
-                        P.predicted_iim,
-                        precursors_for_iim_correction,
-                        tolerance_lo=iim_tolerance_lo,
-                        tolerance_hi=iim_tolerance_hi,
-                        tolerance_method=iim_tolerance_method,
-                        fdr=cfg.sage_summarize.fdr,
-                    )
-                    final_precursors = P.rt_iim_corrected_precursors
-
-                # update_sage_config_rt_iim needs a real RtTolerance/
-                # MobilityTolerance for whichever dimension's correction
-                # ran (tighter, post-correction fit) -- the sentinel for
-                # whichever dimension is inactive. Unlike predicted_rt/
-                # predicted_iim above, update_sage_config_rt_iim's
-                # rt_tolerance/mobility_tolerance inputs are still plain
-                # required NodeTypes, not mixed Node/None -- out of scope
-                # for the 2026-08-26 run_sage merge (see that function's
-                # docstring), so the sentinel stays here.
-                P.precursor_correction_rt_tolerance = (
-                    precursor_correction_rt_tolerance
-                    if precursor_correction_rt_tolerance is not None
-                    else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
-                )
-                P.precursor_correction_mobility_tolerance = (
-                    precursor_correction_mobility_tolerance
-                    if precursor_correction_mobility_tolerance is not None
-                    else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
-                )
-
-                P.recalibrated_sage_config_rt_iim = update_sage_config_rt_iim(
-                    P,
-                    P.recalibrated_sage_config,
-                    P.precursor_correction_rt_tolerance,
-                    P.precursor_correction_mobility_tolerance,
-                    dimensions=dimensions,
-                )
                 (
-                    P.sage_results_json,
-                    P.sage_results_pin,
-                    P.sage_results_tsv,
-                    P.sage_matched_fragments,
-                ) = run_sage(
+                    P.rt_iim_corrected_precursors,
+                    precursor_correction_mobility_tolerance,
+                    P.precursor_correction_iim_models,
+                    P.precursor_correction_iim_fit_plot,
+                ) = correct_precursors_iim(
                     P,
-                    P.recalibrated_mz_pmsms,
-                    final_precursors,
-                    P.fasta,
-                    P.recalibrated_sage_config_rt_iim,
-                    P.sage_binary,
-                    P.predicted_rt,
+                    P.filtered_sage_results_tsv,
                     P.predicted_iim,
-                    _final_pass_fragment_intensity_index,
-                    _final_pass_fragment_intensity_cache,
+                    precursors_for_iim_correction,
+                    tolerance_lo=iim_tolerance_lo,
+                    tolerance_hi=iim_tolerance_hi,
+                    tolerance_method=iim_tolerance_method,
+                    fdr=cfg.sage_summarize.fdr,
                 )
+                final_precursors = P.rt_iim_corrected_precursors
             else:
-                (
-                    P.sage_results_json,
-                    P.sage_results_pin,
-                    P.sage_results_tsv,
-                    P.sage_matched_fragments,
-                ) = run_sage(
-                    P,
-                    P.recalibrated_mz_pmsms,
-                    P.recalibrated_precursors,
-                    P.fasta,
-                    P.recalibrated_sage_config,
-                    P.sage_binary,
-                    None,
-                    None,
-                    _final_pass_fragment_intensity_index,
-                    _final_pass_fragment_intensity_cache,
-                )
-                final_precursors = P.recalibrated_precursors
+                P.predicted_iim = None
+
+            # update_sage_config_rt_iim needs a real RtTolerance/
+            # MobilityTolerance for whichever dimension's correction ran
+            # (tighter, post-correction fit) -- the sentinel for whichever
+            # dimension is inactive (including both, when `dimensions` is
+            # empty). Unlike predicted_rt/predicted_iim above,
+            # update_sage_config_rt_iim's rt_tolerance/mobility_tolerance
+            # inputs are still plain required NodeTypes, not mixed
+            # Node/None -- out of scope for this refactor -- so the
+            # sentinel stays here.
+            P.precursor_correction_rt_tolerance = (
+                precursor_correction_rt_tolerance
+                if precursor_correction_rt_tolerance is not None
+                else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+            )
+            P.precursor_correction_mobility_tolerance = (
+                precursor_correction_mobility_tolerance
+                if precursor_correction_mobility_tolerance is not None
+                else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+            )
+
+            # Unconditional -- a safe no-op copy-through when `dimensions`
+            # is empty (`_update_sage_config_rt_iim_command`'s own
+            # docstring documents this fallback: `cp {sage_config}
+            # {recalibrated_sage_config}`, nothing else), so mz-only jobs
+            # and RT/IIM-active jobs share this one call and the one final
+            # `run_sage` call below.
+            P.recalibrated_sage_config_rt_iim = update_sage_config_rt_iim(
+                P,
+                P.recalibrated_sage_config,
+                P.precursor_correction_rt_tolerance,
+                P.precursor_correction_mobility_tolerance,
+                dimensions=dimensions,
+            )
+            (
+                P.sage_results_json,
+                P.sage_results_pin,
+                P.sage_results_tsv,
+                P.sage_matched_fragments,
+            ) = run_sage(
+                P,
+                P.recalibrated_mz_pmsms,
+                final_precursors,
+                P.fasta,
+                P.recalibrated_sage_config_rt_iim,
+                P.sage_binary,
+                P.predicted_rt,
+                P.predicted_iim,
+                _final_pass_fragment_intensity_index,
+                _final_pass_fragment_intensity_cache,
+            )
 
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
                 P,
@@ -2326,22 +2314,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fragment_mz_search_tolerance,
                 fdr=cfg.sage_summarize.fdr,
             )
-            P.confident_psms = filter_sage_results(
-                P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
-            )
-            P.sage_pmsms_mapping = sage_map_to_pmsms(
-                P,
-                P.confident_psms,
-                P.sage_matched_fragments,
-                P.search_precursors,
-                P.recalibrated_mz_pmsms,
-            )
-            P.score_comparison = score_comparison(
-                P,
-                P.search_precursors,
-                P.search_pmsms,
-                P.sage_pmsms_mapping,
-                P.pseudomsms_config,
+            _finalize_confident_psms(
+                P.search_precursors, P.recalibrated_mz_pmsms, P.search_pmsms
             )
             final_mz_pmsms = P.recalibrated_mz_pmsms
         else:
@@ -2362,22 +2336,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 _final_pass_fragment_intensity_index,
                 _final_pass_fragment_intensity_cache,
             )
-            P.confident_psms = filter_sage_results(
-                P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
-            )
-            P.sage_pmsms_mapping = sage_map_to_pmsms(
-                P,
-                P.confident_psms,
-                P.sage_matched_fragments,
-                P.search_precursors,
-                P.search_mz_pmsms,
-            )
-            P.score_comparison = score_comparison(
-                P,
-                P.search_precursors,
-                P.search_pmsms,
-                P.sage_pmsms_mapping,
-                P.pseudomsms_config,
+            _finalize_confident_psms(
+                P.search_precursors, P.search_mz_pmsms, P.search_pmsms
             )
 
         # getattr, not `P.predicted_rt` directly -- the non-recalibration
