@@ -79,13 +79,14 @@ this RT-only best (`score_margin=0.05`, this pipeline's existing TOF-neighbor
 score-competition filter) came out roughly neutral (34,020 vs 34,133 ions,
 -0.3%) — not worth keeping for this config.
 
-**Considered and scrapped**: an `IsolationForest`-based mokapot plugin
-(`git/mokapot-isolationforest-plugin`) — mokapot's `Model.fit` retrains its
-estimator on the current confident-target/decoy subset each iteration via
-`estimator.fit(samples, iter_targ)`, but `IsolationForest.fit(X, y=None,
-...)` is a plain unsupervised sklearn estimator that silently discards `y`,
-so it never actually learns a target-vs-decoy boundary. Built and tested in
-isolation (unit tests passed, entry point registered correctly) but never
-wired into a real job or committed — the user judged the underlying idea
-unsound before a real run was attempted. Left in `git/` uncommitted; treat
-as abandoned unless explicitly revived.
+**Considered, built, and deleted**: an `IsolationForest`-based mokapot
+plugin (was `git/mokapot-isolationforest-plugin`) — mokapot's `Model.fit`
+retrains its estimator on the current confident-target/decoy subset each
+iteration via `estimator.fit(samples, iter_targ)`, but `IsolationForest.fit(
+X, y=None, ...)` is a plain unsupervised sklearn estimator that silently
+discards `y`, so it never actually learns a target-vs-decoy boundary. Built
+and tested in isolation (unit tests passed, entry point registered
+correctly) but never wired into a real job or committed to a git repo of
+its own — the user judged the underlying idea unsound before a real run
+was attempted, and the directory was deleted outright (2026-09-01). If
+revived, start from this reasoning rather than the deleted code.
