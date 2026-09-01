@@ -451,6 +451,36 @@ class PredictedIim(NodeType):
     filename = "predicted_iim.parquet"
 
 
+class RtPredictionCache(NodeType):
+    """`mmappeteer.PredictionCache` directory (raw Chronologer HI, keyed by
+    sequence) from `git/featureprediction`'s `fill_rt_cache` -- append-only,
+    growing across every real (non-forced) rerun with the same
+    `dumped_peptides` input. `mutable=True` for the same reason as
+    `FragmentIntensityCache`: growth between runs must not invalidate
+    `predict_rt`, which only ever reads it. Split out from `predict_rt`
+    itself because necroflow's `mutable=True` requires a single-output rule
+    and `predict_rt` has three outputs (`predicted_rt`/`rt_tolerance`/
+    `plot`). Added 2026-09-01 -- before this, `predict_rt` had no way to
+    pass `--cache-path` at all (the CLI flag didn't exist), so every job's
+    RT prediction made a real, uncached Chronologer call for every sequence
+    regardless of overlap with a previous job's dumped peptides."""
+
+    filename = "rt_prediction_cache"
+
+
+class IimPredictionCache(NodeType):
+    """`mmappeteer.PredictionCache` directory (converted 1/K0, keyed by
+    sequence+charge) from `git/featureprediction`'s `fill_iim_cache`. Same
+    `mutable=True`/split rationale as `RtPredictionCache`. Kept as its own
+    node (not sharing `RtPredictionCache`'s directory even though
+    `cache.py`'s `PredictionCache` class supports both RT and IIM tables in
+    one instance) so an RT-only job never has to depend on anything
+    IIM/IM2Deep-shaped at all -- consistent with this pipeline's existing
+    RT/IIM independence convention."""
+
+    filename = "iim_prediction_cache"
+
+
 class FragmentIntensityCache(NodeType):
     """`mmappeteer.PredictionCache` directory from `git/featureprediction`'s
     `fragment_intensity.py` -- append-only, growing across every real
@@ -1252,24 +1282,70 @@ def _server_url_arg(value: str | list[str] | None, default: str) -> str:
 
 
 @command(
+    "venvs/featureprediction/bin/feature-prediction-fill-rt-cache"
+    " {dumped_peptides} {rt_prediction_cache} --server-url {server_url}",
+    mutable=True,
+)
+def fill_rt_prediction_cache(dumped_peptides: DumpedPeptides, server_url: str):
+    """Populate the RT-prediction cache for `dumped_peptides`' sequences.
+    `mutable=True` for the same reason as `predict_fragment_intensity` --
+    see `RtPredictionCache`'s docstring. Independently requestable, same
+    reasoning as that rule too: this is a real, network-bound Koina call
+    (though far cheaper than the fragment-intensity fill -- Chronologer's
+    direct-HTTP path runs the full F9477 dump in ~90s), so it must never
+    run just because `dumped_peptides` exists, only when `predict_rt`
+    actually needs it.
+    """
+    rt_prediction_cache = output(RtPredictionCache)
+    return rt_prediction_cache
+
+
+@command(
     "venvs/featureprediction/bin/feature-prediction-generate-rt"
     " {dumped_peptides} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
+    " --cache-path {rt_prediction_cache}"
 )
 def predict_rt(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
+    rt_prediction_cache: RtPredictionCache,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
     server_url: str,
     fdr: int | float,
 ):
+    """`rt_prediction_cache` should be `fill_rt_prediction_cache`'s output,
+    filled with the same `dumped_peptides` beforehand -- given that, this
+    call becomes a pure cache lookup (`predict_hi_cached` finds zero
+    missing sequences), no real Koina call. Still works correctly (just
+    slower, filling on demand) if pointed at a cold/partial cache."""
     predicted_rt = output(PredictedRt)
     rt_tolerance = output(RtTolerance)
     plot = output(RtFitPlot)
     return predicted_rt, rt_tolerance, plot
+
+
+@command(
+    "venvs/featureprediction/bin/feature-prediction-fill-iim-cache"
+    " {dumped_peptides} {iim_prediction_cache}"
+    " --min-charge {min_charge} --max-charge {max_charge} --server-url {server_url}",
+    mutable=True,
+)
+def fill_iim_prediction_cache(
+    dumped_peptides: DumpedPeptides, min_charge: int, max_charge: int, server_url: str
+):
+    """Populate the IIM-prediction cache for `dumped_peptides`' sequences x
+    `[min_charge, max_charge]`. Same rationale as `fill_rt_prediction_cache`
+    -- see `IimPredictionCache`'s docstring. This one is the genuinely
+    expensive Koina call (IM2Deep, synchronous, historically the ~45-minute
+    bottleneck on a full F9477 dump), so caching it properly matters more
+    than for RT.
+    """
+    iim_prediction_cache = output(IimPredictionCache)
+    return iim_prediction_cache
 
 
 @command(
@@ -1278,10 +1354,12 @@ def predict_rt(
     " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
+    " --cache-path {iim_prediction_cache}"
 )
 def predict_iim(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
+    iim_prediction_cache: IimPredictionCache,
     min_charge: int,
     max_charge: int,
     tolerance_lo: int | float,
@@ -1290,6 +1368,9 @@ def predict_iim(
     server_url: str,
     fdr: int | float,
 ):
+    """`iim_prediction_cache` should be `fill_iim_prediction_cache`'s output,
+    filled with the same `dumped_peptides`/charge range beforehand -- same
+    "becomes a pure cache lookup" reasoning as `predict_rt`'s docstring."""
     predicted_iim = output(PredictedIim)
     mobility_tolerance = output(MobilityTolerance)
     plot = output(IimFitPlot)
@@ -2065,10 +2146,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     rt_server_url = _server_url_arg(
                         cfg.recalibration.rt.get("server_url"), _DEFAULT_KOINA_HTTP_SERVER_URL
                     )
+                    P.rt_prediction_cache = fill_rt_prediction_cache(
+                        P, P.dumped_peptides, server_url=rt_server_url
+                    )
                     P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
                         P,
                         P.dumped_peptides,
                         P.filtered_sage_results_tsv,
+                        P.rt_prediction_cache,
                         tolerance_lo=rt_tolerance_lo,
                         tolerance_hi=rt_tolerance_hi,
                         tolerance_method=rt_tolerance_method,
@@ -2096,10 +2181,18 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     iim_server_url = _server_url_arg(
                         cfg.recalibration.iim.get("server_url"), _DEFAULT_KOINA_GRPC_SERVER_URL
                     )
+                    P.iim_prediction_cache = fill_iim_prediction_cache(
+                        P,
+                        P.dumped_peptides,
+                        min_charge=rt_iim_min_charge,
+                        max_charge=rt_iim_max_charge,
+                        server_url=iim_server_url,
+                    )
                     P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
                         P,
                         P.dumped_peptides,
                         P.filtered_sage_results_tsv,
+                        P.iim_prediction_cache,
                         min_charge=rt_iim_min_charge,
                         max_charge=rt_iim_max_charge,
                         tolerance_lo=iim_tolerance_lo,

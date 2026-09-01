@@ -489,3 +489,62 @@ RT+IIM + fragment-intensity + mokapot(xgboost), 32,088 ions — beats every
 previously-recorded number for this dataset (old `ranking_score`-focused best
 was 25,409 ions, RT-only, no mokapot, no real fragment-intensity signal —
 see `software/sage/devel_fixed`'s `CLAUDE.md`).
+
+**Follow-up finding**: a later RT-only run (fragment-intensity + mokapot
+xgboost, no IIM at all) beat the RT+IIM number above — 34,133 ions vs.
+32,088. IIM was actively hurting, not just failing to help: SAGE's own
+ions dropped 24,642→22,500 when IIM was added on top of RT, consistent
+with IM2Deep's IIM eviction quality being weaker than SAGE's own internal
+model (a "roughly a wash" comparison noted elsewhere) — the `combined_score`
+ranking penalty (`0.5·(z_rt²+z_iim²)`) adds noise from a mediocre dimension
+without adding signal. A follow-up `[tof_score_filter]` ablation on top of
+this RT-only best (`score_margin=0.05`, this pipeline's existing TOF-neighbor
+score-competition filter) came out roughly neutral (34,020 vs 34,133 ions,
+-0.3%) — not worth keeping for this config.
+
+## `predict_rt`/`predict_iim` finally get real caching (2026-09-01)
+
+Both rules gained a new required `RtPredictionCache`/`IimPredictionCache`
+input (mutable NodeTypes, mirroring `FragmentIntensityCache`), produced by
+new `fill_rt_prediction_cache`/`fill_iim_prediction_cache` rules and passed
+through to `git/featureprediction`'s new `--cache-path` flag. Before this,
+`predict_rt`/`predict_iim` had no way to pass a cache path at all — every
+job made a full, uncached Koina call for every sequence, even when overlap
+with a previous job's `dumped_peptides` was total. Split into two rules
+(fill + predict) because necroflow's `mutable=True` requires a
+single-output rule; `predict_rt`/`predict_iim` each already have three
+outputs. See `git/featureprediction`'s AI.md for the CLI-side change and
+the real `mmappeteer` bulk-scale bug this surfaced (fixed separately).
+
+**Two new `_pos_inputs` gotchas hit while wiring this** (both apply
+generally to any future mixed Node/`None` or scalar rule input, not just
+this change):
+
+1. Node-shaped rule inputs (matched via `_node_input_contract`) must be
+   passed *positionally*, never as `keyword=` — necroflow's
+   `Rule._validate_input_presence` raises `TypeError: <rule>: unexpected
+   inputs: [...]` if a Node-typed param is passed by keyword, since it
+   classifies every input as strictly `_pos_inputs` (Node-shaped) or
+   `_kw_inputs` (plain scalar) at rule-declaration time, never both. Bit
+   `run_sage`'s `predicted_fragment_intensity_index`/`_cache` first (see
+   the section above) and would have bitten `predict_rt`/`predict_iim`'s
+   new cache params the same way had they been added as keywords.
+2. Plain scalar (`_kw_inputs`) rule params can never be passed a literal
+   `None` at a call site, even when the function's own Python default is
+   `None` — necroflow records the selected value in `dependencies.toml`
+   for provenance (tomlkit-serialized), and tomlkit has no representation
+   for Python's `None`/TOML's absent-value. Use `""` (or another
+   falsy-but-serializable sentinel matching the command template's own
+   truthiness check) instead. Found via `[mokapot].plugin` (see above);
+   the same trap applies to any future optional string/scalar rule param.
+
+Real, measured payoff (F9477, RT-only jobs sharing `dumped_peptides`):
+first job pays a real fill (255.3s, 6.3M sequences, plus SQLite bulk-insert
+overhead — *slower* than the old always-uncached 92.1s single call, since
+caching adds real DB write cost on top of the same network call). A
+second, independent job (different `[recalibration]`/`[fragment_intensity]`
+config, same `dumped_peptides`) then gets `fill_rt_prediction_cache` *and*
+`predict_rt` itself fully reused (confirmed via `./nf -n`, neither node
+appears in the "would-run" list) — the entire RT-prediction cost becomes
+zero for that job, not just the Koina call. The break-even is the second
+job, not the first.
