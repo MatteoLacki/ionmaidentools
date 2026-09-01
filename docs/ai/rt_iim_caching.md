@@ -18,16 +18,24 @@ the real `mmappeteer` bulk-scale bug this surfaced (fixed separately).
 Both apply generally to any future mixed Node/`None` or scalar rule input,
 not just this change:
 
-1. Node-shaped rule inputs (matched via `_node_input_contract`) must be
-   passed *positionally*, never as `keyword=` — necroflow's
-   `Rule._validate_input_presence` raises `TypeError: <rule>: unexpected
-   inputs: [...]` if a Node-typed param is passed by keyword, since it
-   classifies every input as strictly `_pos_inputs` (Node-shaped) or
-   `_kw_inputs` (plain scalar) at rule-declaration time, never both. Bit
-   `run_sage`'s `predicted_fragment_intensity_index`/`_cache` first (see
+1. **Fixed upstream 2026-09-01** (necroflow's "Accept Node inputs by
+   keyword, not just positional") — at the time this was found, Node-shaped
+   rule inputs (matched via `_node_input_contract`) had to be passed
+   *positionally*, never as `keyword=`: `Rule._validate_input_presence`
+   raised `TypeError: <rule>: unexpected inputs: [...]` if a Node-typed
+   param was passed by keyword, since it classified every input as strictly
+   `_pos_inputs` (Node-shaped) or `_kw_inputs` (plain scalar) at
+   rule-declaration time, never both. Bit `run_sage`'s
+   `predicted_fragment_intensity_index`/`_cache` first (see
    `fragment_intensity.md`) and would have bitten `predict_rt`/
    `predict_iim`'s new cache params the same way had they been added as
-   keywords.
+   keywords. After pulling that necroflow release, `run_sage`'s call sites
+   were cleaned up to pass `predicted_rt`/`predicted_iim`/the
+   fragment-intensity pair by keyword (dropping the `None, None`
+   positional-placeholder pattern the mode-1/mode-2 call sites needed
+   before) — verified call-syntax changes alone don't affect provenance
+   (necroflow's own commit message guarantees this; confirmed empirically
+   too, zero hash changes across mode-1/2/3 dry-runs before vs. after).
 2. Plain scalar (`_kw_inputs`) rule params can never be passed a literal
    `None` at a call site, even when the function's own Python default is
    `None` — necroflow records the selected value in `dependencies.toml`

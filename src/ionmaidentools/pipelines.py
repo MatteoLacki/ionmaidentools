@@ -2298,10 +2298,10 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fasta,
                 P.recalibrated_sage_config_rt_iim,
                 P.sage_binary,
-                P.predicted_rt,
-                P.predicted_iim,
-                _final_pass_fragment_intensity_index,
-                _final_pass_fragment_intensity_cache,
+                predicted_rt=P.predicted_rt,
+                predicted_iim=P.predicted_iim,
+                predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
+                predicted_fragment_intensity_cache=_final_pass_fragment_intensity_cache,
             )
 
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
@@ -2331,10 +2331,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fasta,
                 P.sage_config,
                 P.sage_binary,
-                None,
-                None,
-                _final_pass_fragment_intensity_index,
-                _final_pass_fragment_intensity_cache,
+                predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
+                predicted_fragment_intensity_cache=_final_pass_fragment_intensity_cache,
             )
             _finalize_confident_psms(
                 P.search_precursors, P.search_mz_pmsms, P.search_pmsms
