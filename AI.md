@@ -30,7 +30,7 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   `.requests`, resolves `.extends`, and expands grids before calling the factory, so
   the file records the effective factory input.
 - Every rule shells out to a real installed/patched CLI directly — no bespoke Python
-  wrapper CLIs. External tools live at fixed, pre-installed paths (`software/sage/devel_fixed`,
+  wrapper CLIs. External tools live at fixed, pre-installed paths (`git/sage/target/release`,
   `software/fragpipe/fragpipe-24.0`), same convention on both sides.
 - See root `CLAUDE.md`'s "Precursor table format" — all precursor tables in this pipeline
   are `.mmappet` directories (`MmappetDataset` subclasses here), never intermediate parquet.

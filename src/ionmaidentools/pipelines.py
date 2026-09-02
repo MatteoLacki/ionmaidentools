@@ -1231,7 +1231,7 @@ def run_sage(
     the pipeline-factory call site, not by anything in this function --
     feature-only (`ms2_*` scoring columns), no hard eviction, independent
     of predicted_rt/predicted_iim. See
-    `software/sage/devel_fixed/docs/ai/predicted_fragment_intensity.md`.
+    `git/sage/docs/ai/predicted_fragment_intensity.md`.
     """
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
@@ -1814,9 +1814,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.sage_summarize_module = source_sage_summarize_module(
         P, path="git/searchops/src/searchops/sage.py"
     )
-    P.sage_binary = source_sage_binary(P, path="software/sage/devel_fixed/sage")
+    P.sage_binary = source_sage_binary(P, path="git/sage/target/release/sage")
     P.dump_peptides_binary = source_dump_peptides_binary(
-        P, path="software/sage/devel_fixed/dump_peptides"
+        P, path="git/sage/target/release/dump_peptides"
     )
 
     # Raw Extraction
