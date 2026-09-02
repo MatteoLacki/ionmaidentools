@@ -16,9 +16,21 @@ RT-only recalibration + fragment-intensity + mokapot(xgboost), no IIM:
 
 | PSMs | peptides | ions |
 |---|---|---|
-| 98,514 | 28,022 | **34,133** |
+| 99,027 | 31,755 | **34,431** |
 
-See `mokapot_integration.md`'s full ablation table for how this was
+`jobs/f9477_best.toml` itself did not change for this update — the RT
+tolerance/sigma fit it drives went from one flat window to a 10-knot
+RT-dependent spline (`plans/rt_heteroscedastic_tolerance_spline.md`), so the
+same job config now produces a different, better number purely from the
+code change. Previous recorded number: 98,514 / 28,022 / 34,133 (flat
+window, `SpecId`→`used.pin` charge-join counting method, unchanged between
+the two measurements). Single-run comparison — mokapot's own train/test
+split isn't seeded, and this session separately measured ~1.5% (~500 ion)
+run-to-run swing on an unchanged config, so treat this as a real but not
+yet statistically hardened improvement.
+
+See `mokapot_integration.md`'s full ablation table for how the underlying
+config (RT-only + fragment-intensity + mokapot xgboost, no IIM) was
 determined (IIM was found to actively hurt, not just fail to help) and the
 `[tof_score_filter]` ablation that came out neutral on top of this exact
 config.

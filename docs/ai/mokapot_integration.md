@@ -88,5 +88,47 @@ discards `y`, so it never actually learns a target-vs-decoy boundary. Built
 and tested in isolation (unit tests passed, entry point registered
 correctly) but never wired into a real job or committed to a git repo of
 its own — the user judged the underlying idea unsound before a real run
-was attempted, and the directory was deleted outright (2026-09-01). If
-revived, start from this reasoning rather than the deleted code.
+was attempted, and the directory was deleted outright (2026-09-01). Its
+uninstall was incomplete, though: `venvs/mokapot`'s editable-install
+registration (`__editable__.mokapot_isolationforest_plugin-0.1.0.pth` +
+matching `.dist-info`) survived the directory deletion, pointing at a path
+that no longer existed. mokapot enumerates every registered
+`mokapot.plugins` entry point at startup regardless of which `--plugin` is
+actually requested, so any real (non-cached) mokapot run —
+`--plugin xgboost` included — crashed with
+`ModuleNotFoundError: No module named 'mokapot_isolationforest'` until
+those two stale files were removed (2026-09-01, found while verifying the
+RT-heteroscedastic-spline change below, since it was the first real mokapot
+recompute since the plugin's deletion).
+
+## RT-heteroscedastic tolerance spline: real F9477 measurement (2026-09-01)
+
+`plans/rt_heteroscedastic_tolerance_spline.md`: `correct_precursors_rt`'s
+`rt_tol_sec`/`rt_sigma_sec` fit went from one flat (RT-independent) window
+to a 10-knot RT-dependent spline (SAGE's `LinearSpline`/`ValueTolSpline`
+already supported arbitrary node counts; `rt_sigma_sec` — and
+`Feature::delta_rt_z2_external`'s scale — needed a small Rust change to
+follow suit, see that plan for the exact diff). Motivated by a real
+residual-vs-RT diagnostic showing genuine heteroscedasticity even after
+`spectrum_q`-filtering (robust sigma ~3.7s at low RT vs ~6.4s at high RT,
+quintile-binned) — quantifying, not contradicting, the small "genuine
+widening at the tail" `plans/better_sage_filtering.md`'s B.5 (2026-08-20)
+had already flagged but judged not worth modeling at the time.
+
+Same `jobs/f9477_best.toml` config, same `SpecId`→`used.pin` charge-join
+counting method, only the code changed:
+
+| | PSMs | peptides | ions |
+|---|---:|---:|---:|
+| flat window (previous) | 96,909 | 31,125 | 33,640 |
+| 10-knot spline | 99,027 | 31,755 | **34,431** |
+| Δ | +2,118 | +630 | **+791 (+2.4%)** |
+
+For scale: a comparably-sized flat-window change tested the same session
+(`tolerance_percentiles` `[1,99]` → `[0.5,99.5]`, no spline) moved ions by
+only +21/33,640 — noise-level. +791 is well above that, and above the
+~1.5% (~500-ion) run-to-run mokapot stochasticity this session separately
+observed on an *unchanged* config (mokapot's train/test split isn't
+seeded). Single-run comparison, not yet repeated to harden the effect
+size — see the plan file's verification section for what a fuller
+confirmation would need.
