@@ -3,7 +3,10 @@
 ## C++ MS1 extraction
 
 `ionmaiden_pipeline` uses `git/ionmaidenmetal/build/tdf2ms ms1` for `ms1_events`,
-passing the Necroflow-allocated thread count and `--overwrite`. The rule validates both
+passing the Necroflow-allocated thread count, `--paced-writeback-mib 1024`, and
+`--overwrite`. The 1024-MiB budget makes the production MS1 output clean before
+exit, avoiding the measured 36-37 second dirty-page tail without a new pipeline
+configuration knob. The rule validates both
 mmappet split-index datasets and the event-dataset schema before completion. The in-memory
 slice contract is unchanged from `d2ms1`; both indices now use the common mmappet-array
 format, so all peak-picking and precursor consumers retain the same `(tof,urt,scan)` slices.

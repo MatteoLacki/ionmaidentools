@@ -655,7 +655,7 @@ def write_pipeline_config(text: str):
 
 @command(
     "git/ionmaidenmetal/build/tdf2ms ms1 {tdf} {ms1}"
-    " --threads {threads} --overwrite"
+    " --threads {threads} --paced-writeback-mib 1024 --overwrite"
     " && test -f {ms1}/tof_row_starts.mmappet/schema.txt"
     " && test -f {ms1}/tof_urt_diff_index.mmappet/schema.txt"
     " && test -f {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt",
