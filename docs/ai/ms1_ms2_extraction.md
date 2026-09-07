@@ -4,10 +4,13 @@
 
 `ionmaiden_pipeline` uses `git/ionmaidenmetal/build/tdf2ms ms1` for `ms1_events`,
 passing the Necroflow-allocated thread count, `--paced-writeback-mib 1024`, and
-`--overwrite`. The 1024-MiB budget makes the production MS1 output clean before
-exit, avoiding the measured 36-37 second dirty-page tail without a new pipeline
-configuration knob. The rule validates both
-mmappet split-index datasets and the event-dataset schema before completion. The in-memory
+`--overwrite`. It deliberately does not pass `--implicit-tof-urt`: current
+pipeline consumers need the compatible four-column payload. The converter merges only
+`scan`/`intensity`, then materializes `tof`/`urt` from the TOF and URT split indexes
+in a separate parallel pass. The rule verifies those physical columns as well as both
+index datasets. The 1024-MiB budget makes production MS1 output clean before exit,
+avoiding the measured 36-37 second dirty-page tail without a new pipeline
+configuration knob. The in-memory
 slice contract is unchanged from `d2ms1`; both indices now use the common mmappet-array
 format, so all peak-picking and precursor consumers retain the same `(tof,urt,scan)` slices.
 

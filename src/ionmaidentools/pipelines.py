@@ -658,7 +658,8 @@ def write_pipeline_config(text: str):
     " --threads {threads} --paced-writeback-mib 1024 --overwrite"
     " && test -f {ms1}/tof_row_starts.mmappet/schema.txt"
     " && test -f {ms1}/tof_urt_diff_index.mmappet/schema.txt"
-    " && test -f {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt",
+    " && grep -qx 'uint32 tof' {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt"
+    " && grep -qx 'uint16 urt' {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt",
     threads=CORES,
 )
 def tdf2ms1(tdf: BrukerD):
