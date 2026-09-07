@@ -988,12 +988,13 @@ def materialize_pmsms_mz(input_pmsms: Pmsms, tdf: BrukerD):
 
 @command(
     "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments} {mz_pmsms}"
-    " {output_pmsms} {mz_recalibration} {tolerance} {plot} --config {config} --fdr {fdr}"
+    " {precursors} {output_pmsms} {mz_recalibration} {tolerance} {plot} --config {config} --fdr {fdr}"
 )
 def recalibrate_pmsms_mz(
     sage_results_tsv: SageResultsTsv,
     matched_fragments: SageMatchedFragments,
     mz_pmsms: MzPmsms,
+    precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
     fdr: int | float,
 ):
@@ -1968,8 +1969,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.search_precursors = P.pre_sage_filtered_precursors
 
     P.search_mz_pmsms = materialize_pmsms_mz(P, P.search_pmsms, P.tdf)
-    final_mz_pmsms = P.search_mz_pmsms
-    final_precursors = P.search_precursors
+    current_mz_pmsms = P.search_mz_pmsms
+    current_precursors = P.search_precursors
 
     # Search
 
@@ -2097,6 +2098,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
                 P.search_mz_pmsms,
+                P.search_precursors,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
@@ -2139,7 +2141,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             precursor_correction_rt_tolerance = None
             precursor_correction_mobility_tolerance = None
             precursors_for_iim_correction = P.recalibrated_precursors
-            final_precursors = P.recalibrated_precursors
+            current_precursors = P.recalibrated_precursors
 
             if "rt" in dimensions:
                 rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt["tolerance_percentiles"]
@@ -2177,7 +2179,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     fdr=cfg.sage_summarize.fdr,
                 )
                 precursors_for_iim_correction = P.rt_corrected_precursors
-                final_precursors = P.rt_corrected_precursors
+                current_precursors = P.rt_corrected_precursors
             else:
                 # Plain Python `None`, not a `NoPrediction` sentinel node --
                 # `run_sage`'s `predicted_rt` is a true mixed Node/`None`
@@ -2249,7 +2251,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     tolerance_method=iim_tolerance_method,
                     fdr=cfg.sage_summarize.fdr,
                 )
-                final_precursors = P.rt_iim_corrected_precursors
+                current_precursors = P.rt_iim_corrected_precursors
             else:
                 P.predicted_iim = None
 
@@ -2294,7 +2296,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             ) = run_sage(
                 P,
                 P.recalibrated_mz_pmsms,
-                final_precursors,
+                current_precursors,
                 P.fasta,
                 P.recalibrated_sage_config_rt_iim,
                 P.sage_binary,
@@ -2317,7 +2319,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             _finalize_confident_psms(
                 P.search_precursors, P.recalibrated_mz_pmsms, P.search_pmsms
             )
-            final_mz_pmsms = P.recalibrated_mz_pmsms
+            current_mz_pmsms = P.recalibrated_mz_pmsms
         else:
             (
                 P.sage_results_json,
@@ -2396,7 +2398,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P, P.sage_results_tsv, P.sage_summarize_module, fdr=cfg.sage_summarize.fdr
         )
 
-    # Exports -- final_mz_pmsms/final_precursors are the mz/rt/iim-corrected
+    # Exports -- current_mz_pmsms/current_precursors are the mz/rt/iim-corrected
     # outputs when recalibration ran (mode 2: mz only; mode 3: mz+RT+IIM),
     # otherwise the plain (uncorrected) MzPmsms/search_precursors from
     # materialize_pmsms_mz above (mode 1). Both must come from the same mode
@@ -2404,14 +2406,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # results disagree on what a peak's mz/rt/iim actually was -- see
     # plans/better_sage_filtering.md's B.6.
     P.search_mzml, P.search_mzml_idmap = convert_search_pmsms_to_mzml(
-        P, final_mz_pmsms, final_precursors,
+        P, current_mz_pmsms, current_precursors,
     )
     mgf_config_path = cfg.get("mgf", {}).get("config_path")
     if mgf_config_path:
         P.search_mgf = convert_search_pmsms_to_mgf(
             P,
-            final_mz_pmsms,
-            final_precursors,
+            current_mz_pmsms,
+            current_precursors,
             config_path=mgf_config_path,
         )
 

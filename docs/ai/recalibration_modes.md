@@ -50,12 +50,15 @@ pipelines") — properly removing the sentinel would mean splitting
 `update_sage_config_rt_iim` into up to 3 static-template rule variants
 instead; not done, deliberately deferred as a larger, separate change.
 
-`final_mz_pmsms`/`final_precursors` are three-way selections feeding
+`current_mz_pmsms`/`current_precursors` are three-way selections feeding
 `convert_search_pmsms_to_mzml`/`convert_search_pmsms_to_mgf` — whichever
 mode ran, exported MGF/mzML headers match exactly what SAGE1 actually
-searched against. Before B.6, `final_precursors` didn't exist at all
+searched against. Before B.6, this variable didn't exist at all
 (exports always used raw `search_precursors`, even in mode 2) — a
-pre-existing gap this closes for mz too, not just RT/IIM.
+pre-existing gap this closes for mz too, not just RT/IIM. Named
+`current_*`, not `final_*` (2026-09-07 rename): each is reassigned as
+later recalibration/RT/IIM stages run, so it's only "final" once the
+factory function returns, not at its point of definition.
 
 MGF export is optional: `convert_search_pmsms_to_mgf` is wired only when
 `[mgf].config_path` is present. The path is a scalar rule input rather than a typed

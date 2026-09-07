@@ -132,3 +132,54 @@ observed on an *unchanged* config (mokapot's train/test split isn't
 seeded). Single-run comparison, not yet repeated to harden the effect
 size — see the plan file's verification section for what a fuller
 confirmation would need.
+
+## Considered, built, not adopted: fragment m/z RT-bias term (2026-09-02)
+
+Analogous idea to the RT-tolerance spline above, but for `recalibrate_pmsms_mz`
+(fragment m/z correction) instead of `correct_precursors_rt`: fragment ppm
+residual after the existing mz-only P-spline fit still carries a small
+RT-dependent bias (spectrum-level median drift from about -0.4ppm at low RT
+to -1.1ppm at high RT, checked via the same confident-hit fragment set used
+for the diagnostic above — real, survives aggregating to one row per PSM to
+rule out a fragments-per-spectrum-count artifact, but an order of magnitude
+smaller effect than the RT-tolerance-spline's heteroscedasticity finding).
+
+Implemented as a second, sequential fit term: `f_mz(fragment_mz) +
+f_rt(precursor_rt)`, since every fragment in a spectrum shares its
+precursor's RT — a per-spectrum additive shift, not a per-fragment one.
+`recalibrate_pmsms_mz` gained a new `precursors` input (`PreSageFilteredPrecursors`,
+wired as `P.search_precursors`, sibling of the existing `mz_pmsms` input —
+no new pipeline node, just a new edge into the existing rule) to supply both
+the fit-time RT signal and, via `cut_and_index_precursors`'s existing
+`fragment_spectrum_start`/`fragment_event_cnt` CSR columns, an apply-time
+per-fragment RT broadcast (`timstofu.timstofmisc.broadcast_precursor_values_to_fragments`,
+new). Applied via a new `apply_mz_recalibration_mz_rt` (sums both correctors)
+alongside the existing single-dim `apply_mz_recalibration`.
+
+**Found and fixed one real bug during verification**: `precursors_ds["rt"]`
+is raw Bruker frame time in *seconds* (`timstofu.candidate_postprocessing
+.annotate`'s `frame2rt` lookup, range ~0.6-508s on F9477), while
+`sage_results_tsv`'s own `rt` column — what the RT term is fit on — is
+*minutes* (~0.02-8.2 on F9477). A first end-to-end run silently applied a
+near-constant ~-1ppm shift to almost every fragment (the fit's flat-clamped
+edge value, since the mismatched-unit apply-time grid mostly fell outside
+the fit's real domain) and cost 678 ions. Fixed by converting
+`precursors_ds["rt"]` to minutes (`/ 60.0`) before use.
+
+**Real F9477 measurement, after the fix**, same `jobs/f9477_best.toml`,
+same counting method, against the RT-heteroscedastic-spline baseline above:
+
+| | PSMs | peptides | ions |
+|---|---:|---:|---:|
+| baseline (no fragment RT term) | 99,027 | 31,755 | 34,431 |
+| + fragment mz+rt correction | 97,826 | 31,326 | 33,905 |
+| Δ | -1,201 | -429 | **-526 (-1.5%)** |
+
+Right at the ~500-ion / ~1.5% mokapot run-to-run noise floor — not a clean
+regression, but clearly not an improvement either, consistent with the
+bias magnitude being an order of magnitude smaller than what made the
+RT-tolerance-spline change worthwhile. **Decision: keep the code (it's
+correct, tested, and the `precursors` wiring is harmless when unused) but
+`jobs/f9477_best.toml` is not updated to use it** — same
+ask-before-updating rule as `bestrun.md`, and this result doesn't clear
+the bar.
