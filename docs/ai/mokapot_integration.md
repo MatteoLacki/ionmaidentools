@@ -183,3 +183,52 @@ correct, tested, and the `precursors` wiring is harmless when unused) but
 `jobs/f9477_best.toml` is not updated to use it** — same
 ask-before-updating rule as `bestrun.md`, and this result doesn't clear
 the bar.
+
+### Follow-up: swapped the sequential fit for real backfitting (2026-09-07)
+
+The "sequential" fit above (`f_mz.fit(mz, ppm)`, then `f_rt.fit(rt,
+residual)` once) wasn't actually the GAM/backfitting this module already
+had a real implementation of (`fit_additive_correction`'s
+`pspline_additive` branch, present since before this feature but never
+wired to any pipeline rule or test — genuinely dead code until now).
+Sequential fitting only approximates the joint fit when the dims are
+uncorrelated; real backfitting iterates both dims against each other's
+current residual (`config.get("backfit_iters", 15)` rounds, re-centering
+each component to zero mean every round so the split stays identifiable).
+
+Two prerequisite fixes, both committed separately before the swap:
+- Removed `fit_additive_correction`'s unused, untested `xgboost_additive`
+  branch (dead code, never called, no config ever referenced it).
+- `pspline_additive` hardcoded one shared `bin_width_da`/`lam1`/`lam2`/
+  `degree` across every dim — wrong once dims stop sharing a scale
+  (fragment m/z is Da-scale, ~200-1700; RT is minute-scale, ~0-8). Each
+  now accepts either a scalar (unchanged behavior) or a `{dim: value}`
+  dict. Verified on synthetic mz+rt data: a shared `bin_width_da=10`
+  (sane for mz) gave ~16x worse RT-component fit than per-dim
+  `{"mz": 10.0, "rt": 0.5}`.
+
+`recalibrate_pmsms_mz` now calls `fit_additive_correction(dims=["mz",
+"rt"], config={"model": "pspline_additive", ...})` directly instead of
+two separate `PSplineModel.fit()` calls; `config["fragment_model"]["class"]`
+must be `PSplineModel` now (backfitting needs the same smoother family for
+both dims each round, unlike the old mz-only fit's pluggable `build_model`).
+
+**Real F9477 measurement**, same job/counting method, against both
+earlier numbers:
+
+| | PSMs | peptides | ions |
+|---|---:|---:|---:|
+| baseline (no fragment RT term) | 99,027 | 31,755 | 34,431 |
+| + fragment RT term, sequential (2026-09-02) | 97,826 | 31,326 | 33,905 |
+| + fragment RT term, backfitting (2026-09-07) | 99,112 | 31,798 | **34,498** |
+| Δ backfitting vs sequential | +1,286 | +472 | **+593 (+1.7%)** |
+| Δ backfitting vs baseline | +85 | +43 | **+67 (+0.2%)** |
+
+Backfitting recovers the sequential fit's regression entirely (the
+one-pass approximation really was measurably worse here, not just
+theoretically), but the net effect of the fragment RT term itself is
+still a wash: +67/34,431 sits well inside the ~500-ion/1.5% noise floor.
+**Same decision as before: keep the code, don't adopt into
+`jobs/f9477_best.toml`** — now on firmer footing, since backfitting rules
+out "the fit method itself is broken" as an explanation for the earlier
+non-result.
