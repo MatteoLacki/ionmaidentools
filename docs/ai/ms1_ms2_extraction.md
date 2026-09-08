@@ -3,16 +3,21 @@
 ## C++ MS1 extraction
 
 `ionmaiden_pipeline` uses `git/ionmaidenmetal/build/tdf2ms ms1` for `ms1_events`,
-passing the Necroflow-allocated thread count, `--paced-writeback-mib 1024`, and
-`--overwrite`. It deliberately does not pass `--implicit-tof-urt`: current
-pipeline consumers need the compatible four-column payload. The converter merges only
-`scan`/`intensity`, then materializes `tof`/`urt` from the TOF and URT split indexes
-in a separate parallel pass. The rule verifies those physical columns as well as both
-index datasets. The 1024-MiB budget makes production MS1 output clean before exit,
-avoiding the measured 36-37 second dirty-page tail without a new pipeline
-configuration knob. The in-memory
-slice contract is unchanged from `d2ms1`; both indices now use the common mmappet-array
-format, so all peak-picking and precursor consumers retain the same `(tof,urt,scan)` slices.
+passing the allocated thread count, `--paced-writeback-mib 1024`,
+`--implicit-tof-urt`, and `--overwrite`. Its payload contains only uint32 scan and
+intensity columns. Both TOF/URT split indexes remain unchanged. Completion guards
+check both indexes, scan/intensity types, and absence of physical TOF/URT columns.
+
+Timstofu derives raw-event centers from index spans; existing window processors
+still receive complete local scratch tensors. Scale estimation retains its full
+local tensor outputs for Python analysis. Selected precursor tables retain TOF/URT
+coordinates. Legacy materialized datasets remain readable, and the standalone
+converter still defaults to materialized output. No pipeline storage-mode knob.
+
+The 1024-MiB budget makes MS1 conversion output clean before exit, avoiding the
+previously measured dirty-page tail. See
+`git/timstofu/docs/ai/compact_ms1.md` (relative to the pipeline root) for consumer
+coverage and the 2026-09-08 full-chain equivalence/runtime measurements.
 
 The converter decompresses each MS1 frame once, stable-count-sorts it to a `(tof,scan)` run, then
 uses event-balanced TOF shards to merge runs into disjoint sequential mmap regions while building
