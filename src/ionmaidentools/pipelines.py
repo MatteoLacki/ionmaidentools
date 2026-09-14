@@ -1382,7 +1382,7 @@ def predict_iim(
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-rt"
-    " {sage_results_tsv} {predicted_rt} {mz_corrected_precursors}"
+    " {sage_results_tsv} {predicted_rt} {dumped_peptides} {mz_corrected_precursors}"
     " {output_precursors} {rt_tolerance} {rt_model} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}"
@@ -1390,6 +1390,7 @@ def predict_iim(
 def correct_precursors_rt(
     sage_results_tsv: SageResultsTsv,
     predicted_rt: PredictedRt,
+    dumped_peptides: DumpedPeptides,
     mz_corrected_precursors: RecalibratedPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
@@ -1405,14 +1406,18 @@ def correct_precursors_rt(
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-iim"
-    " {sage_results_tsv} {predicted_iim} {mz_corrected_precursors}"
+    " {sage_results_tsv} {predicted_iim} {dumped_peptides} {mz_corrected_precursors}"
     " {output_precursors} {mobility_tolerance} {iim_models} {plot}"
+    " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}"
 )
 def correct_precursors_iim(
     sage_results_tsv: SageResultsTsv,
     predicted_iim: PredictedIim,
+    dumped_peptides: DumpedPeptides,
+    min_charge: int,
+    max_charge: int,
     mz_corrected_precursors: RecalibratedPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
@@ -2174,6 +2179,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P,
                     P.filtered_sage_results_tsv,
                     P.predicted_rt,
+                    P.dumped_peptides,
                     P.recalibrated_precursors,
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
@@ -2247,6 +2253,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P,
                     P.filtered_sage_results_tsv,
                     P.predicted_iim,
+                    P.dumped_peptides,
+                    rt_iim_min_charge,
+                    rt_iim_max_charge,
                     precursors_for_iim_correction,
                     tolerance_lo=iim_tolerance_lo,
                     tolerance_hi=iim_tolerance_hi,
