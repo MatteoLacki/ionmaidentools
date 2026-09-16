@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from pathlib import Path
+
 import tomlkit
 
 from dictodot import DotDict
@@ -451,57 +453,12 @@ class PredictedIim(NodeType):
     filename = "predicted_iim.parquet"
 
 
-class RtPredictionCache(NodeType):
-    """`mmappeteer.PredictionCache` directory (raw Chronologer HI, keyed by
-    sequence) from `git/featureprediction`'s `fill_rt_cache` -- append-only,
-    growing across every real (non-forced) rerun with the same
-    `dumped_peptides` input. `mutable=True` for the same reason as
-    `FragmentIntensityCache`: growth between runs must not invalidate
-    `predict_rt`, which only ever reads it. Split out from `predict_rt`
-    itself because necroflow's `mutable=True` requires a single-output rule
-    and `predict_rt` has three outputs (`predicted_rt`/`rt_tolerance`/
-    `plot`). Added 2026-09-01 -- before this, `predict_rt` had no way to
-    pass `--cache-path` at all (the CLI flag didn't exist), so every job's
-    RT prediction made a real, uncached Chronologer call for every sequence
-    regardless of overlap with a previous job's dumped peptides."""
-
-    filename = "rt_prediction_cache"
-
-
-class IimPredictionCache(NodeType):
-    """`mmappeteer.PredictionCache` directory (converted 1/K0, keyed by
-    sequence+charge) from `git/featureprediction`'s `fill_iim_cache`. Same
-    `mutable=True`/split rationale as `RtPredictionCache`. Kept as its own
-    node (not sharing `RtPredictionCache`'s directory even though
-    `cache.py`'s `PredictionCache` class supports both RT and IIM tables in
-    one instance) so an RT-only job never has to depend on anything
-    IIM/IM2Deep-shaped at all -- consistent with this pipeline's existing
-    RT/IIM independence convention."""
-
-    filename = "iim_prediction_cache"
-
-
-class FragmentIntensityCache(NodeType):
-    """`mmappeteer.PredictionCache` directory from `git/featureprediction`'s
-    `fragment_intensity.py` -- append-only, growing across every real
-    (non-forced) rerun of `predict_fragment_intensity` with the same
-    inputs (lookup-before-append: a rerun makes no duplicate Koina calls
-    for keys already cached). Its producer rule is `mutable=True`
-    (necroflow's own "persistent single-output state whose external byte
-    changes should not invalidate consumers" mechanism, `docs/rules.md`'s
-    "Mutable Rules") specifically so that the cache growing between runs
-    never stales anything downstream, and its workdir is exempt from
-    necroflow's autoclean. See `plans/fragment_intensity_cache.md`."""
-
-    filename = "fragment_intensity_cache"
-
-
 class FragmentIntensityForSage(NodeType):
     """Job-scoped *index* from `git/featureprediction`'s
     `export_fragment_intensity_for_sage` -- `sequence, charge, start, end`
     pointers (not a copy of the sparse payload) for exactly this job's
     `dumped_peptides` x charge range, resolved against the (much bigger,
-    shared, ever-growing) `FragmentIntensityCache`. A future SAGE reader
+    shared, ever-growing) fragment-intensity cache under `[caches] root`. A future SAGE reader
     keeps that cache's `arrays.mmappet` mmapped and uses this file only to
     look up which `[start, end)` range belongs to which `(sequence,
     charge)` -- see `git/featureprediction`'s AI.md. Not yet consumed by
@@ -1091,64 +1048,76 @@ def dump_peptides(
 _DEFAULT_FRAGMENT_COLLISION_ENERGY = 30.0
 _DEFAULT_FRAGMENT_FRAGMENTATION_TYPE = "HCD"
 
+# Prediction caches (RT/IIM/fragment-intensity) live *outside* `nodes/`,
+# addressed by a plain path parameter rather than produced by a rule.
+#
+# They are semantically neutral by construction: every consumer does
+# lookup-before-append against a deterministic key, so a cold cache and a warm
+# one yield byte-identical output and differ only in how many Koina calls get
+# made. That invariant is what licenses keeping them out of node identity.
+#
+# Until 2026-09-16 they were `mutable=True` single-output nodes. `mutable=True`
+# stops a cache's *bytes* from staling consumers, but the cache directory was
+# still `nodes/<rule>/<hash>/`, so any change to the job's `dumped_peptides`
+# hash -- including edits that provably cannot affect the cache, such as
+# `bucket_size` -- produced a fresh empty directory and discarded the fill.
+# On F9477 that cost 2711s of fragment-intensity refill plus 315s of RT refill
+# out of a 3474s run. See AI.md, "Prediction caches".
+_DEFAULT_CACHE_ROOT = "~/Projects/mscaches"
+
+# Duplicated from `git/featureprediction`'s `koina_client` -- can't import
+# across venvs (same reasoning as `_DEFAULT_KOINA_*_SERVER_URL` below). Used
+# only to name cache directories, keyed by what the cache's own key does *not*
+# cover; `feature_prediction.fragment_intensity.open_or_create_cache`
+# independently refuses a cache whose recorded `model_names` disagrees.
+_KOINA_INTENSITY_MODEL = "Prosit_2024_intensity_PTMs_gl_compact_trt"
+_KOINA_RT_MODEL = "Chronologer_RT"
+_KOINA_IIM_MODEL = "IM2Deep"
+
+
+def _cache_root(cfg) -> Path:
+    """`[caches] root` from the job config, else `$MSCACHES_ROOT`, else
+    `~/Projects/mscaches`."""
+    configured = cfg.caches.get("root") if "caches" in cfg else None
+    return Path(configured or os.environ.get("MSCACHES_ROOT") or _DEFAULT_CACHE_ROOT).expanduser()
+
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-generate-fragments"
-    " {dumped_peptides} {fragment_intensity_cache}"
+    " {dumped_peptides} {fragment_intensity_cache_path}"
     " --min-charge {min_charge} --max-charge {max_charge}"
-    " --collision-energy {collision_energy} --fragmentation-type {fragmentation_type}",
-    mutable=True,
+    " --collision-energy {collision_energy} --fragmentation-type {fragmentation_type}"
+    " && venvs/featureprediction/bin/feature-prediction-export-fragments-for-sage"
+    " {dumped_peptides} {fragment_intensity_cache_path} {fragment_intensity_for_sage}"
+    " --min-charge {min_charge} --max-charge {max_charge} --collision-energy {collision_energy}"
 )
-def predict_fragment_intensity(
+def export_fragment_intensity_for_sage(
     dumped_peptides: DumpedPeptides,
+    fragment_intensity_cache_path: str,
     min_charge: int,
     max_charge: int,
     collision_energy: float,
     fragmentation_type: str,
 ):
-    """Populate the persistent fragment-intensity `PredictionCache` for
-    `dumped_peptides`' sequences x `[min_charge, max_charge]`.
-    `mutable=True` (see `FragmentIntensityCache`'s docstring): the cache
-    grows in place across reruns with the same inputs rather than
-    starting fresh each time, and its workdir is exempt from autoclean.
-    Independently requestable (like `ms2_tsf_events`/`ms2_tfs_events`) --
-    no downstream consumer in the DAG yet (SAGE doesn't read this cache),
-    and it's a real, expensive, network-bound operation (a full
-    human-proteome fill took ~43 minutes against the live Koina server),
-    so it must never run just because `dumped_peptides` exists -- only
-    when explicitly requested via `.requests`. See
-    `plans/fragment_intensity_cache.md`.
-    """
-    fragment_intensity_cache = output(FragmentIntensityCache)
-    return fragment_intensity_cache
+    """Fill the shared fragment-intensity cache at `fragment_intensity_cache_path`
+    for this job's `dumped_peptides` x `[min_charge, max_charge]`, then scope it
+    down to a job-local pointer index via `git/featureprediction`'s DuckDB-based
+    export -- see that repo's AI.md, "`export_fragment_intensity.py`".
 
+    Fill and export are one rule, two commands, because `export_fragment_intensity.py`
+    is strictly read-only: a key absent from the cache silently exports `-1`
+    sentinels rather than erroring, so something must guarantee the fill ran
+    first. Splitting them would mean a separate rule whose only output is the
+    cache -- which is exactly the node-scoped-cache arrangement this replaced
+    (see `_DEFAULT_CACHE_ROOT`). Safe as one node precisely because the cache
+    lives outside the workdir: if the export half fails, the fill's appends
+    survive, and the retry re-looks-up instead of re-calling Koina.
 
-@command(
-    "venvs/featureprediction/bin/feature-prediction-export-fragments-for-sage"
-    " {dumped_peptides} {fragment_intensity_cache} {fragment_intensity_for_sage}"
-    " --min-charge {min_charge} --max-charge {max_charge} --collision-energy {collision_energy}"
-)
-def export_fragment_intensity_for_sage(
-    dumped_peptides: DumpedPeptides,
-    fragment_intensity_cache: FragmentIntensityCache,
-    min_charge: int,
-    max_charge: int,
-    collision_energy: float,
-):
-    """Scope `fragment_intensity_cache` (shared, ever-growing across every
-    job) down to exactly this job's `dumped_peptides` x `[min_charge,
-    max_charge]`, via `git/featureprediction`'s DuckDB-based export -- see
-    that repo's AI.md, "`export_fragment_intensity.py`". Ordinary
-    (non-mutable) rule despite depending on a `mutable=True` parent: per
-    `docs/rules.md`'s "Mutable Rules", "if a mutable call executes during
-    the current run, every consumer replays" -- so this always sees the
-    cache state left by `predict_fragment_intensity`'s own most recent
-    (real, non-forced) run in the same invocation, never a stale one.
-    Independently requestable, same reasoning as `predict_fragment_intensity`
-    itself -- no downstream consumer in the DAG yet (SAGE doesn't read this
-    export), so it must never run just because `dumped_peptides`/
-    `fragment_intensity_cache` exist, only when explicitly requested via
-    `.requests`.
+    Independently requestable (like `ms2_tsf_events`/`ms2_tfs_events`) -- no
+    downstream consumer in the DAG unless `[fragment_intensity]` is present in
+    the job config, and the fill half is a real, expensive, network-bound
+    operation (a full human-proteome fill took ~43 minutes against the live
+    Koina server), so this must never run just because `dumped_peptides` exists.
     """
     fragment_intensity_for_sage = output(FragmentIntensityForSage)
     return fragment_intensity_for_sage
@@ -1185,14 +1154,14 @@ def _run_sage_command(args: CommandArgs) -> str:
     if args.inputs.predicted_iim is not None:
         flags += f" --predicted-iim {shlex.quote(str(args.inputs.predicted_iim))}"
     # Both-or-neither, mirroring Rust's own `Input::build()` validation --
-    # `predicted_fragment_intensity_cache` is the *directory* the
-    # PredictionCache node produced; the Rust reader only ever wants its
-    # `arrays.mmappet` subdirectory (never `index.sqlite3`/`write.lock`),
-    # see `docs/ai/predicted_fragment_intensity.md`.
+    # `fragment_intensity_cache_path` is the shared cache *directory* (a plain
+    # config path, not a node -- see `_DEFAULT_CACHE_ROOT`); the Rust reader
+    # only ever wants its `arrays.mmappet` subdirectory (never
+    # `index.sqlite3`/`write.lock`), see `docs/ai/predicted_fragment_intensity.md`.
     if args.inputs.predicted_fragment_intensity_index is not None:
         frag_index = shlex.quote(str(args.inputs.predicted_fragment_intensity_index))
         frag_cache = shlex.quote(
-            str(args.inputs.predicted_fragment_intensity_cache / "arrays.mmappet")
+            str(Path(args.config.fragment_intensity_cache_path) / "arrays.mmappet")
         )
         flags += (
             f" --predicted-fragment-intensity-index {frag_index}"
@@ -1218,7 +1187,7 @@ def run_sage(
     predicted_rt: PredictedRt | None = None,
     predicted_iim: PredictedIim | None = None,
     predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
-    predicted_fragment_intensity_cache: FragmentIntensityCache | None = None,
+    fragment_intensity_cache_path: str | None = None,
 ):
     """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
     Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
@@ -1229,9 +1198,11 @@ def run_sage(
     enforces Rust-side. See plans/better_sage_filtering.md's B.4-B.6 and
     plans/rt_iim_independent_dimensions.md.
 
-    `predicted_fragment_intensity_index`/`_cache` are likewise both-or-
-    neither (mixed Node/`None`), gated by `"fragment_intensity" in cfg` at
-    the pipeline-factory call site, not by anything in this function --
+    `predicted_fragment_intensity_index` (a mixed Node/`None` input) and
+    `fragment_intensity_cache_path` (a plain config path, since the shared
+    cache is no longer a node -- see `_DEFAULT_CACHE_ROOT`) are both-or-
+    neither, gated by `"fragment_intensity" in cfg` at the pipeline-factory
+    call site, not by anything in this function --
     feature-only (`ms2_*` scoring columns), no hard eviction, independent
     of predicted_rt/predicted_iim. See
     `git/sage/docs/ai/predicted_fragment_intensity.md`.
@@ -1285,70 +1256,32 @@ def _server_url_arg(value: str | list[str] | None, default: str) -> str:
 
 
 @command(
-    "venvs/featureprediction/bin/feature-prediction-fill-rt-cache"
-    " {dumped_peptides} {rt_prediction_cache} --server-url {server_url}",
-    mutable=True,
-)
-def fill_rt_prediction_cache(dumped_peptides: DumpedPeptides, server_url: str):
-    """Populate the RT-prediction cache for `dumped_peptides`' sequences.
-    `mutable=True` for the same reason as `predict_fragment_intensity` --
-    see `RtPredictionCache`'s docstring. Independently requestable, same
-    reasoning as that rule too: this is a real, network-bound Koina call
-    (though far cheaper than the fragment-intensity fill -- Chronologer's
-    direct-HTTP path runs the full F9477 dump in ~90s), so it must never
-    run just because `dumped_peptides` exists, only when `predict_rt`
-    actually needs it.
-    """
-    rt_prediction_cache = output(RtPredictionCache)
-    return rt_prediction_cache
-
-
-@command(
     "venvs/featureprediction/bin/feature-prediction-generate-rt"
     " {dumped_peptides} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
-    " --cache-path {rt_prediction_cache}"
+    " --cache-path {rt_cache_path}"
 )
 def predict_rt(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
-    rt_prediction_cache: RtPredictionCache,
+    rt_cache_path: str,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
     server_url: str,
     fdr: int | float,
 ):
-    """`rt_prediction_cache` should be `fill_rt_prediction_cache`'s output,
-    filled with the same `dumped_peptides` beforehand -- given that, this
-    call becomes a pure cache lookup (`predict_hi_cached` finds zero
-    missing sequences), no real Koina call. Still works correctly (just
-    slower, filling on demand) if pointed at a cold/partial cache."""
+    """`rt_cache_path` is the shared RT cache directory (a plain config path,
+    not a node -- see `_DEFAULT_CACHE_ROOT`), created on first use. No separate
+    fill rule: `predict_hi_cached` already looks up, calls Chronologer for
+    exactly the missing sequences, and appends, so a warm cache makes this a
+    pure lookup and a cold one just makes it slower. Chronologer's direct-HTTP
+    path fills the full F9477 dump in ~90s even from empty."""
     predicted_rt = output(PredictedRt)
     rt_tolerance = output(RtTolerance)
     plot = output(RtFitPlot)
     return predicted_rt, rt_tolerance, plot
-
-
-@command(
-    "venvs/featureprediction/bin/feature-prediction-fill-iim-cache"
-    " {dumped_peptides} {iim_prediction_cache}"
-    " --min-charge {min_charge} --max-charge {max_charge} --server-url {server_url}",
-    mutable=True,
-)
-def fill_iim_prediction_cache(
-    dumped_peptides: DumpedPeptides, min_charge: int, max_charge: int, server_url: str
-):
-    """Populate the IIM-prediction cache for `dumped_peptides`' sequences x
-    `[min_charge, max_charge]`. Same rationale as `fill_rt_prediction_cache`
-    -- see `IimPredictionCache`'s docstring. This one is the genuinely
-    expensive Koina call (IM2Deep, synchronous, historically the ~45-minute
-    bottleneck on a full F9477 dump), so caching it properly matters more
-    than for RT.
-    """
-    iim_prediction_cache = output(IimPredictionCache)
-    return iim_prediction_cache
 
 
 @command(
@@ -1357,12 +1290,12 @@ def fill_iim_prediction_cache(
     " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
-    " --cache-path {iim_prediction_cache}"
+    " --cache-path {iim_cache_path}"
 )
 def predict_iim(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
-    iim_prediction_cache: IimPredictionCache,
+    iim_cache_path: str,
     min_charge: int,
     max_charge: int,
     tolerance_lo: int | float,
@@ -1371,9 +1304,13 @@ def predict_iim(
     server_url: str,
     fdr: int | float,
 ):
-    """`iim_prediction_cache` should be `fill_iim_prediction_cache`'s output,
-    filled with the same `dumped_peptides`/charge range beforehand -- same
-    "becomes a pure cache lookup" reasoning as `predict_rt`'s docstring."""
+    """`iim_cache_path` is the shared IIM cache directory (a plain config path,
+    not a node -- see `_DEFAULT_CACHE_ROOT`), created on first use. No separate
+    fill rule, same reasoning as `predict_rt`: `predict_iim_cached` looks up,
+    calls IM2Deep for the missing `(sequence, charge)` pairs, and appends. This
+    is the genuinely expensive Koina call (IM2Deep, synchronous, historically
+    the ~45-minute bottleneck on a full F9477 dump), so a warm shared cache
+    matters more here than for RT."""
     predicted_iim = output(PredictedIim)
     mobility_tolerance = output(MobilityTolerance)
     plot = output(IimFitPlot)
@@ -1998,49 +1935,53 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P, P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
 
-        # Independently requestable (see `predict_fragment_intensity`'s
+        # Shared prediction caches, addressed by path rather than produced by
+        # a rule -- see `_DEFAULT_CACHE_ROOT` for why they sit outside `nodes/`.
+        # Each directory is named by what its own cache key does not cover, so
+        # switching model or fragmentation type opens a different cache instead
+        # of mixing incomparable predictions under one key.
+        _cache_dir = _cache_root(cfg)
+        _fragment_intensity_cache_path = str(
+            _cache_dir
+            / "fragment_intensity"
+            / f"{_KOINA_INTENSITY_MODEL}_{_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE}"
+        )
+        _rt_cache_path = str(_cache_dir / "rt" / _KOINA_RT_MODEL)
+        _iim_cache_path = str(_cache_dir / "iim" / _KOINA_IIM_MODEL)
+
+        # Independently requestable (see `export_fragment_intensity_for_sage`'s
         # docstring) -- min_charge/max_charge mirror the same
         # cfg.sage.precursor_charge-or-SAGE's-own-(2,4)-default derivation
         # `[recalibration.iim]` uses below, computed here too since this
         # runs unconditionally (not nested inside `"recalibration" in cfg`).
+        # One call now fills the shared cache and exports this job's pointer
+        # index from it, so the exported range can never miss keys the fill
+        # would have covered.
         _fragment_min_charge, _fragment_max_charge = cfg.sage.get("precursor_charge", (2, 4))
-        P.predicted_fragment_intensity = predict_fragment_intensity(
+        P.fragment_intensity_for_sage = export_fragment_intensity_for_sage(
             P,
             P.dumped_peptides,
+            fragment_intensity_cache_path=_fragment_intensity_cache_path,
             min_charge=_fragment_min_charge,
             max_charge=_fragment_max_charge,
             collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
             fragmentation_type=_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE,
         )
-        # Same independently-requestable reasoning (see
-        # `export_fragment_intensity_for_sage`'s docstring) -- reuses the
-        # same charge range/collision_energy the cache above was filled
-        # with, so a request for this never sees a coverage gap from a
-        # mismatched range.
-        P.fragment_intensity_for_sage = export_fragment_intensity_for_sage(
-            P,
-            P.dumped_peptides,
-            P.predicted_fragment_intensity,
-            min_charge=_fragment_min_charge,
-            max_charge=_fragment_max_charge,
-            collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
-        )
 
         # `[fragment_intensity]` (presence-only table) is the on/off switch
         # for actually feeding the cache above into search -- without this
-        # gate, threading `P.fragment_intensity_for_sage`/
-        # `P.predicted_fragment_intensity` into `run_sage` unconditionally
-        # would make *every* sage job transitively depend on
-        # `predict_fragment_intensity`, breaking its own documented
+        # gate, threading `P.fragment_intensity_for_sage` into `run_sage`
+        # unconditionally would make *every* sage job transitively depend on
+        # `export_fragment_intensity_for_sage`, breaking its own documented
         # "never runs just because `dumped_peptides` exists" invariant.
         # Mirrors `"recalibration" in cfg`/`"rt"/"iim" in cfg.recalibration`'s
         # own table-presence-as-flag convention.
         if "fragment_intensity" in cfg:
             _final_pass_fragment_intensity_index = P.fragment_intensity_for_sage
-            _final_pass_fragment_intensity_cache = P.predicted_fragment_intensity
+            _final_pass_fragment_intensity_cache_path = _fragment_intensity_cache_path
         else:
             _final_pass_fragment_intensity_index = None
-            _final_pass_fragment_intensity_cache = None
+            _final_pass_fragment_intensity_cache_path = None
 
         def _finalize_confident_psms(search_precursors, mz_pmsms, search_pmsms):
             """confident_psms -> sage_pmsms_mapping -> score_comparison, the
@@ -2156,14 +2097,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 rt_server_url = _server_url_arg(
                     cfg.recalibration.rt.get("server_url"), _DEFAULT_KOINA_HTTP_SERVER_URL
                 )
-                P.rt_prediction_cache = fill_rt_prediction_cache(
-                    P, P.dumped_peptides, server_url=rt_server_url
-                )
                 P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
                     P,
                     P.dumped_peptides,
                     P.filtered_sage_results_tsv,
-                    P.rt_prediction_cache,
+                    rt_cache_path=_rt_cache_path,
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
                     tolerance_method=rt_tolerance_method,
@@ -2218,18 +2156,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 iim_server_url = _server_url_arg(
                     cfg.recalibration.iim.get("server_url"), _DEFAULT_KOINA_GRPC_SERVER_URL
                 )
-                P.iim_prediction_cache = fill_iim_prediction_cache(
-                    P,
-                    P.dumped_peptides,
-                    min_charge=rt_iim_min_charge,
-                    max_charge=rt_iim_max_charge,
-                    server_url=iim_server_url,
-                )
                 P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
                     P,
                     P.dumped_peptides,
                     P.filtered_sage_results_tsv,
-                    P.iim_prediction_cache,
+                    iim_cache_path=_iim_cache_path,
                     min_charge=rt_iim_min_charge,
                     max_charge=rt_iim_max_charge,
                     tolerance_lo=iim_tolerance_lo,
@@ -2314,7 +2245,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 predicted_rt=P.predicted_rt,
                 predicted_iim=P.predicted_iim,
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
-                predicted_fragment_intensity_cache=_final_pass_fragment_intensity_cache,
+                fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
             )
 
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
@@ -2345,7 +2276,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_config,
                 P.sage_binary,
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
-                predicted_fragment_intensity_cache=_final_pass_fragment_intensity_cache,
+                fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
             )
             _finalize_confident_psms(
                 P.search_precursors, P.search_mz_pmsms, P.search_pmsms
