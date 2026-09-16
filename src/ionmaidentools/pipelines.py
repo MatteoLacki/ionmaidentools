@@ -1063,7 +1063,16 @@ _DEFAULT_FRAGMENT_FRAGMENTATION_TYPE = "HCD"
 # `bucket_size` -- produced a fresh empty directory and discarded the fill.
 # On F9477 that cost 2711s of fragment-intensity refill plus 315s of RT refill
 # out of a 3474s run. See AI.md, "Prediction caches".
-_DEFAULT_CACHE_ROOT = "~/Projects/mscaches"
+#
+# A fixed working-directory-relative path, never a job-config value and never read
+# from the environment here. `mscaches` is a Makefile-managed symlink, the same
+# convention `data` and `fastas` already use: `make mscaches` points it at
+# `$ION_MAIDEN_MSCACHES_PATH` if that is set, else creates a plain directory. The
+# indirection matters because the cache path is an ordinary config parameter and
+# therefore lands in node identity -- keeping the literal string fixed means two
+# people with caches on different filesystems still compute the same hashes,
+# which resolving an absolute path here would have broken.
+_CACHE_ROOT = "mscaches"
 
 # Duplicated from `git/featureprediction`'s `koina_client` -- can't import
 # across venvs (same reasoning as `_DEFAULT_KOINA_*_SERVER_URL` below). Used
@@ -1075,11 +1084,9 @@ _KOINA_RT_MODEL = "Chronologer_RT"
 _KOINA_IIM_MODEL = "IM2Deep"
 
 
-def _cache_root(cfg) -> Path:
-    """`[caches] root` from the job config, else `$MSCACHES_ROOT`, else
-    `~/Projects/mscaches`."""
-    configured = cfg.caches.get("root") if "caches" in cfg else None
-    return Path(configured or os.environ.get("MSCACHES_ROOT") or _DEFAULT_CACHE_ROOT).expanduser()
+def _cache_root() -> Path:
+    """The shared prediction-cache root (see `_CACHE_ROOT`)."""
+    return Path(_CACHE_ROOT)
 
 
 @command(
@@ -1943,7 +1950,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # Each directory is named by what its own cache key does not cover, so
         # switching model or fragmentation type opens a different cache instead
         # of mixing incomparable predictions under one key.
-        _cache_dir = _cache_root(cfg)
+        _cache_dir = _cache_root()
         _fragment_intensity_cache_path = str(
             _cache_dir
             / "fragment_intensity"
