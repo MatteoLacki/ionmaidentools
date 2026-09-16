@@ -1187,7 +1187,7 @@ def run_sage(
     predicted_rt: PredictedRt | None = None,
     predicted_iim: PredictedIim | None = None,
     predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
-    fragment_intensity_cache_path: str | None = None,
+    fragment_intensity_cache_path: str = "",
 ):
     """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
     Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
@@ -1202,7 +1202,10 @@ def run_sage(
     `fragment_intensity_cache_path` (a plain config path, since the shared
     cache is no longer a node -- see `_DEFAULT_CACHE_ROOT`) are both-or-
     neither, gated by `"fragment_intensity" in cfg` at the pipeline-factory
-    call site, not by anything in this function --
+    call site, not by anything in this function. The path defaults to `""`
+    rather than `None` because config values are serialized into the node's
+    `dependencies.toml` and TOML has no null; only the index input decides
+    whether either is used --
     feature-only (`ms2_*` scoring columns), no hard eviction, independent
     of predicted_rt/predicted_iim. See
     `git/sage/docs/ai/predicted_fragment_intensity.md`.
@@ -1981,7 +1984,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             _final_pass_fragment_intensity_cache_path = _fragment_intensity_cache_path
         else:
             _final_pass_fragment_intensity_index = None
-            _final_pass_fragment_intensity_cache_path = None
+            _final_pass_fragment_intensity_cache_path = ""
 
         def _finalize_confident_psms(search_precursors, mz_pmsms, search_pmsms):
             """confident_psms -> sage_pmsms_mapping -> score_comparison, the
