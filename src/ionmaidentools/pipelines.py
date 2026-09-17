@@ -304,6 +304,20 @@ class MokapotPsms(NodeType):
     filename = "mokapot.psms.txt"
 
 
+# Fixed at 3 outputs because `_MOKAPOT_FOLDS` is fixed at 3 -- would need a
+# 4th NodeType (and a 4th `mokapot()` output/return value) if that ever changes.
+class MokapotModelFold1(NodeType):
+    filename = "mokapot.model_fold-1.pkl"
+
+
+class MokapotModelFold2(NodeType):
+    filename = "mokapot.model_fold-2.pkl"
+
+
+class MokapotModelFold3(NodeType):
+    filename = "mokapot.model_fold-3.pkl"
+
+
 class ConfidentPsmsParquet(NodeType):
     filename = "confident_psms.parquet"
 
@@ -1584,6 +1598,12 @@ def update_sage_config_rt_iim(
     return recalibrated_sage_config
 
 
+# mokapot's own CLI default (`--folds`, never overridden here) -- kept in sync
+# manually since it determines how `_mokapot_command` splits cores between
+# fold-level (`--max_workers`) and per-fit (`--xgboost_n_jobs`) parallelism.
+_MOKAPOT_FOLDS = 3
+
+
 def _mokapot_command(args: CommandArgs) -> str:
     """Python command callback, not a static template -- lets `--plugin`
     be added conditionally (empty for the plain-Sage-PIN call, `--plugin
@@ -1597,13 +1617,70 @@ def _mokapot_command(args: CommandArgs) -> str:
     (its original, unchanged, FileName-drop-only behavior) -- that PIN is
     already leakage-filtered upstream by
     `sagepy_rescore.features.build_feature_frame`.
+
+    `--max_workers`/`--xgboost_n_jobs` are derived from the executing
+    machine's core count, not job config -- mokapot's own CV folds are
+    embarrassingly parallel (`mokapot.brew`) and each fold's XGBoost fit
+    is independently threadable, so both are free wall-clock wins with no
+    effect on results beyond mokapot's existing run-to-run stochasticity.
+    They're computed here rather than passed as `mokapot()` kwargs because
+    they're pure execution tuning, not part of the model; the provenance
+    hash covers declared rule config, not the realized command string, so
+    this can't make node identity core-count-dependent across machines.
+
+    `scripts/run_mokapot.py`, not the `mokapot` CLI binary, runs the
+    second step -- same flags, same `mokapot.peptides.txt`/`mokapot.psms.txt`
+    outputs, but loads `used_pin` via pandas' C `read_csv` and hands the
+    DataFrame straight to `mokapot.parsers.pin.read_pin`, skipping the
+    CLI's own hand-rolled PIN parser (~9s/~13% of wall time on a real
+    F9477 run, see `mokapot_integration.md`).
+
+    `xgboost_bagging_*` flags only emitted when `plugin == "xgboost"` and
+    `xgboost_bagging_n_estimators > 0` -- 0 (both call sites' Python-level
+    default) means the plugin builds a plain `XGBClassifier` exactly as
+    before, byte-for-byte, so existing jobs that don't set these are
+    unaffected. See `mokapot_integration.md` for what bagging mode is and
+    why.
+
+    `model` (`"xgboost"`/`"histgb"`/`"lightgbm"`, "" default) selects
+    which estimator `scripts/run_mokapot.py` builds when `plugin ==
+    "xgboost"` -- only meaningful together with `plugin = "xgboost"` set,
+    same "" (not None)-for-unset reason as `plugin` itself. Both xgboost
+    and lightgbm request GPU (CUDA) unconditionally and fall back to CPU
+    when none is available -- xgboost's own pip wheel self-detects,
+    lightgbm needs `run_mokapot.py`'s own smoke-test wrapper to get the
+    same behavior. See `mokapot_integration.md`.
     """
     pin = shlex.quote(str(args.inputs.pin))
     used_pin = shlex.quote(str(args.outputs.used_pin))
     peptides = shlex.quote(str(args.outputs.peptides))
     psms = shlex.quote(str(args.outputs.psms))
+    model_fold_1 = shlex.quote(str(args.outputs.model_fold_1))
+    model_fold_2 = shlex.quote(str(args.outputs.model_fold_2))
+    model_fold_3 = shlex.quote(str(args.outputs.model_fold_3))
     workdir = shlex.quote(str(args.workdir))
     plugin_flag = f" --plugin {args.config.plugin}" if args.config.plugin else ""
+
+    # sched_getaffinity respects cgroup/taskset core limits (e.g. under
+    # Docker, see `docker_present.sh`); cpu_count() ignores them and would
+    # oversubscribe a constrained container.
+    if hasattr(os, "sched_getaffinity"):
+        n_cores = len(os.sched_getaffinity(0))
+    else:
+        n_cores = os.cpu_count() or 1
+    max_workers = min(_MOKAPOT_FOLDS, n_cores)
+    xgboost_flags = ""
+    if args.config.plugin == "xgboost":
+        xgboost_flags = f" --xgboost_n_jobs {max(1, n_cores // max_workers)}"
+        if args.config.model:
+            xgboost_flags += f" --model {args.config.model}"
+        if args.config.xgboost_bagging_n_estimators > 0:
+            xgboost_flags += (
+                f" --xgboost_bagging_n_estimators {args.config.xgboost_bagging_n_estimators}"
+                f" --xgboost_bagging_max_samples {args.config.xgboost_bagging_max_samples}"
+                f" --xgboost_bagging_seed {args.config.xgboost_bagging_seed}"
+            )
+
     adapter_flags = ""
     if args.config.rt_source is not None or args.config.iim_source is not None:
         rt_source = shlex.quote(args.config.rt_source or "none")
@@ -1612,10 +1689,12 @@ def _mokapot_command(args: CommandArgs) -> str:
     return (
         f"venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {pin} -o {used_pin}"
         f"{adapter_flags}"
-        f" && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
+        f" && venvs/mokapot/bin/python scripts/run_mokapot.py {used_pin} --dest_dir {workdir}"
         f" --train_fdr {args.config.train_fdr} --test_fdr {args.config.test_fdr}"
-        f"{plugin_flag}"
+        f" --max_workers {max_workers}"
+        f"{plugin_flag}{xgboost_flags}"
         f" && test -f {peptides} && test -f {psms}"
+        f" && test -f {model_fold_1} && test -f {model_fold_2} && test -f {model_fold_3}"
     )
 
 
@@ -1627,11 +1706,18 @@ def mokapot(
     plugin: str | None = None,
     rt_source: str | None = None,
     iim_source: str | None = None,
+    model: str | None = None,
+    xgboost_bagging_n_estimators: int = 0,
+    xgboost_bagging_max_samples: int = 30_000,
+    xgboost_bagging_seed: int = 0,
 ):
     used_pin = output(MokapotUsedPin)
     peptides = output(MokapotPeptides)
     psms = output(MokapotPsms)
-    return used_pin, peptides, psms
+    model_fold_1 = output(MokapotModelFold1)
+    model_fold_2 = output(MokapotModelFold2)
+    model_fold_3 = output(MokapotModelFold3)
+    return used_pin, peptides, psms, model_fold_1, model_fold_2, model_fold_3
 
 
 @text_file
@@ -2464,7 +2550,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # the sagepy_rescore branch below (always xgboost, unrelated call),
         # this call site's model choice is config-driven so a job can pick
         # mokapot's own default (linear SVM) or xgboost.
-        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
+        (
+            P.mokapot_used_pin,
+            P.mokapot_peptides,
+            P.mokapot_psms,
+            P.mokapot_model_fold_1,
+            P.mokapot_model_fold_2,
+            P.mokapot_model_fold_3,
+        ) = mokapot(
             P,
             P.sage_results_pin,
             # "" (not None) when unset -- necroflow's dependency-provenance
@@ -2475,6 +2568,16 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             plugin=(cfg.mokapot.get("plugin", "") if "mokapot" in cfg else ""),
             rt_source=("external" if getattr(P, "predicted_rt", None) is not None else "none"),
             iim_source=("external" if getattr(P, "predicted_iim", None) is not None else "none"),
+            model=(cfg.mokapot.get("model", "") if "mokapot" in cfg else ""),
+            xgboost_bagging_n_estimators=(
+                cfg.mokapot.get("xgboost_bagging_n_estimators", 0) if "mokapot" in cfg else 0
+            ),
+            xgboost_bagging_max_samples=(
+                cfg.mokapot.get("xgboost_bagging_max_samples", 30_000) if "mokapot" in cfg else 30_000
+            ),
+            xgboost_bagging_seed=(
+                cfg.mokapot.get("xgboost_bagging_seed", 0) if "mokapot" in cfg else 0
+            ),
         )
 
         if "sagepy_rescore" in cfg:
@@ -2497,12 +2600,23 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sagepy_rescore_used_pin,
                 P.sagepy_rescore_peptides,
                 P.sagepy_rescore_psms,
+                P.sagepy_rescore_model_fold_1,
+                P.sagepy_rescore_model_fold_2,
+                P.sagepy_rescore_model_fold_3,
             ) = mokapot(
                 P,
                 P.sagepy_rescore_pin,
                 train_fdr=cfg.sagepy_rescore.get("train_fdr", 0.01),
                 test_fdr=cfg.sagepy_rescore.get("test_fdr", 0.01),
                 plugin="xgboost",
+                model=cfg.sagepy_rescore.get("model", ""),
+                xgboost_bagging_n_estimators=cfg.sagepy_rescore.get(
+                    "xgboost_bagging_n_estimators", 0
+                ),
+                xgboost_bagging_max_samples=cfg.sagepy_rescore.get(
+                    "xgboost_bagging_max_samples", 30_000
+                ),
+                xgboost_bagging_seed=cfg.sagepy_rescore.get("xgboost_bagging_seed", 0),
             )
 
         # FDR Summary
