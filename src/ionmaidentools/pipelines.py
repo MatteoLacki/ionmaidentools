@@ -240,13 +240,16 @@ class DumpPeptidesBinary(NodeType):
 
 
 class DumpPeptidesConfig(NodeType):
-    """Just the `database` subdictionary of a `SageConfig` — the only
-    settings `dump_peptides` depends on (fasta, enzyme, mods, mass bounds,
-    decoy_tag). Sliced out of the full sage config by `extract_dump_peptides_config`
-    so `dump_peptides` itself never needs to read (or be valid against)
-    unrelated search settings like `precursor_tol`."""
+    """The digestion settings from `cfg.sage.database` that `dump_peptides`
+    reads (fasta, enzyme, mods, mass bounds, decoys)."""
 
     filename = "dump_peptides_config.json"
+
+
+class FragmentIndexConfig(NodeType):
+    """`DumpPeptidesConfig` plus `min_ion_index`, for `bin_fragment_index`."""
+
+    filename = "fragment_index_config.json"
 
 
 class DumpedPeptides(NodeType):
@@ -1084,6 +1087,12 @@ def write_dump_peptides_config(text: str):
     return dump_peptides_config
 
 
+@text_file
+def write_fragment_index_config(text: str):
+    fragment_index_config = output(FragmentIndexConfig)
+    return fragment_index_config
+
+
 @command(
     "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} -o {peptides}"
 )
@@ -1204,12 +1213,12 @@ MASS_GRID_TARGET_PIXELS = 8192
 
 
 @command(
-    "{dump_fragment_index_binary} -f {fasta} -c {dump_peptides_config} -o {grid}"
+    "{dump_fragment_index_binary} -f {fasta} -c {fragment_index_config} -o {grid}"
     " --{binning} {bin_width} --target-pixels {target_pixels}"
 )
 def bin_fragment_index(
     fasta: Fasta,
-    dump_peptides_config: DumpPeptidesConfig,
+    fragment_index_config: FragmentIndexConfig,
     dump_fragment_index_binary: DumpFragmentIndexBinary,
     binning: str,
     bin_width: float,
@@ -2148,8 +2157,28 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # unrelated sage settings (precursor_tol, report_psms, ...) but
         # share the same digestion settings produce the same
         # content-addressed node here, reusing one `dump_peptides` run.
+        # Only the keys `Parameters::digest` reads, so search-only settings
+        # like `bucket_size` do not rerun `dump_peptides` and its predictions.
+        database = cfg.sage.database
+        dump_peptides_database = {
+            "decoy_tag": database["decoy_tag"],
+            "enzyme": database["enzyme"],
+            "generate_decoys": database["generate_decoys"],
+            "max_variable_mods": database["max_variable_mods"],
+            "peptide_max_mass": database["peptide_max_mass"],
+            "peptide_min_mass": database["peptide_min_mass"],
+            "static_mods": database["static_mods"],
+            "variable_mods": database["variable_mods"],
+        }
+        fragment_index_database = {
+            **dump_peptides_database,
+            "min_ion_index": database["min_ion_index"],
+        }
         P.dump_peptides_config = write_dump_peptides_config(
-            P, text=json.dumps(cfg.sage.database, sort_keys=True, indent=2) + "\n"
+            P, text=json.dumps(dump_peptides_database, sort_keys=True, indent=2) + "\n"
+        )
+        P.fragment_index_config = write_fragment_index_config(
+            P, text=json.dumps(fragment_index_database, sort_keys=True, indent=2) + "\n"
         )
         P.dumped_peptides = dump_peptides(
             P, P.fasta, P.dump_peptides_config, P.dump_peptides_binary
@@ -2201,7 +2230,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 "fragment_index": bin_fragment_index(
                     P,
                     P.fasta,
-                    P.dump_peptides_config,
+                    P.fragment_index_config,
                     P.dump_fragment_index_binary,
                     **binning,
                 ),
