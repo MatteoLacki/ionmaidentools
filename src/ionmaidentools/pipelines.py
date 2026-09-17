@@ -307,20 +307,6 @@ class MokapotPsms(NodeType):
     filename = "mokapot.psms.txt"
 
 
-# Fixed at 3 outputs because `_MOKAPOT_FOLDS` is fixed at 3 -- would need a
-# 4th NodeType (and a 4th `mokapot()` output/return value) if that ever changes.
-class MokapotModelFold1(NodeType):
-    filename = "mokapot.model_fold-1.pkl"
-
-
-class MokapotModelFold2(NodeType):
-    filename = "mokapot.model_fold-2.pkl"
-
-
-class MokapotModelFold3(NodeType):
-    filename = "mokapot.model_fold-3.pkl"
-
-
 class ConfidentPsmsParquet(NodeType):
     filename = "confident_psms.parquet"
 
@@ -1627,22 +1613,24 @@ def _mokapot_command(args: CommandArgs) -> str:
     already leakage-filtered upstream by
     `sagepy_rescore.features.build_feature_frame`.
 
-    `--max_workers`/`--xgboost_n_jobs` are derived from the executing
-    machine's core count, not job config -- mokapot's own CV folds are
-    embarrassingly parallel (`mokapot.brew`) and each fold's XGBoost fit
-    is independently threadable, so both are free wall-clock wins with no
-    effect on results beyond mokapot's existing run-to-run stochasticity.
-    They're computed here rather than passed as `mokapot()` kwargs because
-    they're pure execution tuning, not part of the model; the provenance
-    hash covers declared rule config, not the realized command string, so
-    this can't make node identity core-count-dependent across machines.
+    Calls the real `mokapot` CLI binary, not a Python-API wrapper --
+    `git/mokapot` (our fork, pinned to a `v0.10.0`-based branch) patches
+    `read_percolator` to use DuckDB instead of its original hand-rolled
+    line-by-line parser and fixes `--seed` to actually seed `brew()`'s
+    rng (previously a no-op: only the legacy `np.random.seed` global was
+    touched). Both fixed at the source instead of worked around
+    externally -- see `mokapot_integration.md`.
 
-    `scripts/run_mokapot.py`, not the `mokapot` CLI binary, runs the
-    second step -- same flags, same `mokapot.peptides.txt`/`mokapot.psms.txt`
-    outputs, but loads `used_pin` via pandas' C `read_csv` and hands the
-    DataFrame straight to `mokapot.parsers.pin.read_pin`, skipping the
-    CLI's own hand-rolled PIN parser (~9s/~13% of wall time on a real
-    F9477 run, see `mokapot_integration.md`).
+    `--max_workers`/`--xgboost_n_jobs`/`--lightgbm_n_jobs` are derived
+    from the executing machine's core count, not job config -- mokapot's
+    own CV folds are embarrassingly parallel (`mokapot.brew`) and each
+    fold's fit is independently threadable, so both are free wall-clock
+    wins with no effect on results beyond mokapot's own stochasticity
+    (now seedable, see `seed` below). Computed here rather than passed as
+    `mokapot()` kwargs because they're pure execution tuning, not part of
+    the model; the provenance hash covers declared rule config, not the
+    realized command string, so this can't make node identity
+    core-count-dependent across machines.
 
     `xgboost_bagging_*` flags only emitted when `plugin == "xgboost"` and
     `xgboost_bagging_n_estimators > 0` -- 0 (both call sites' Python-level
@@ -1651,22 +1639,18 @@ def _mokapot_command(args: CommandArgs) -> str:
     unaffected. See `mokapot_integration.md` for what bagging mode is and
     why.
 
-    `model` (`"xgboost"`/`"histgb"`/`"lightgbm"`, "" default) selects
-    which estimator `scripts/run_mokapot.py` builds when `plugin ==
-    "xgboost"` -- only meaningful together with `plugin = "xgboost"` set,
-    same "" (not None)-for-unset reason as `plugin` itself. Both xgboost
-    and lightgbm request GPU (CUDA) unconditionally and fall back to CPU
-    when none is available -- xgboost's own pip wheel self-detects,
-    lightgbm needs `run_mokapot.py`'s own smoke-test wrapper to get the
-    same behavior. See `mokapot_integration.md`.
+    `seed` is always passed (mokapot's own CLI default is 1; matching it
+    here means omitting `[mokapot].seed` changes nothing) -- job-config
+    seeding for every random-state site in this part of the pipeline:
+    `brew()`'s own rng (mokapot core, fixed above) plus each plugin's
+    `random_state` (`--xgboost_seed`/`--lightgbm_seed`, reusing the same
+    integer). Verified end-to-end: two real runs with the same seed
+    produced byte-identical output files.
     """
     pin = shlex.quote(str(args.inputs.pin))
     used_pin = shlex.quote(str(args.outputs.used_pin))
     peptides = shlex.quote(str(args.outputs.peptides))
     psms = shlex.quote(str(args.outputs.psms))
-    model_fold_1 = shlex.quote(str(args.outputs.model_fold_1))
-    model_fold_2 = shlex.quote(str(args.outputs.model_fold_2))
-    model_fold_3 = shlex.quote(str(args.outputs.model_fold_3))
     workdir = shlex.quote(str(args.workdir))
     plugin_flag = f" --plugin {args.config.plugin}" if args.config.plugin else ""
 
@@ -1678,17 +1662,19 @@ def _mokapot_command(args: CommandArgs) -> str:
     else:
         n_cores = os.cpu_count() or 1
     max_workers = min(_MOKAPOT_FOLDS, n_cores)
-    xgboost_flags = ""
+    per_fit_jobs = max(1, n_cores // max_workers)
+
+    plugin_flags = ""
     if args.config.plugin == "xgboost":
-        xgboost_flags = f" --xgboost_n_jobs {max(1, n_cores // max_workers)}"
-        if args.config.model:
-            xgboost_flags += f" --model {args.config.model}"
+        plugin_flags = f" --xgboost_n_jobs {per_fit_jobs} --xgboost_seed {args.config.seed}"
         if args.config.xgboost_bagging_n_estimators > 0:
-            xgboost_flags += (
+            plugin_flags += (
                 f" --xgboost_bagging_n_estimators {args.config.xgboost_bagging_n_estimators}"
                 f" --xgboost_bagging_max_samples {args.config.xgboost_bagging_max_samples}"
                 f" --xgboost_bagging_seed {args.config.xgboost_bagging_seed}"
             )
+    elif args.config.plugin == "lightgbm":
+        plugin_flags = f" --lightgbm_n_jobs {per_fit_jobs} --lightgbm_seed {args.config.seed}"
 
     adapter_flags = ""
     if args.config.rt_source is not None or args.config.iim_source is not None:
@@ -1698,12 +1684,11 @@ def _mokapot_command(args: CommandArgs) -> str:
     return (
         f"venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {pin} -o {used_pin}"
         f"{adapter_flags}"
-        f" && venvs/mokapot/bin/python scripts/run_mokapot.py {used_pin} --dest_dir {workdir}"
+        f" && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
         f" --train_fdr {args.config.train_fdr} --test_fdr {args.config.test_fdr}"
-        f" --max_workers {max_workers}"
-        f"{plugin_flag}{xgboost_flags}"
+        f" --max_workers {max_workers} --seed {args.config.seed}"
+        f"{plugin_flag}{plugin_flags}"
         f" && test -f {peptides} && test -f {psms}"
-        f" && test -f {model_fold_1} && test -f {model_fold_2} && test -f {model_fold_3}"
     )
 
 
@@ -1715,7 +1700,7 @@ def mokapot(
     plugin: str | None = None,
     rt_source: str | None = None,
     iim_source: str | None = None,
-    model: str | None = None,
+    seed: int = 1,
     xgboost_bagging_n_estimators: int = 0,
     xgboost_bagging_max_samples: int = 30_000,
     xgboost_bagging_seed: int = 0,
@@ -1723,10 +1708,7 @@ def mokapot(
     used_pin = output(MokapotUsedPin)
     peptides = output(MokapotPeptides)
     psms = output(MokapotPsms)
-    model_fold_1 = output(MokapotModelFold1)
-    model_fold_2 = output(MokapotModelFold2)
-    model_fold_3 = output(MokapotModelFold3)
-    return used_pin, peptides, psms, model_fold_1, model_fold_2, model_fold_3
+    return used_pin, peptides, psms
 
 
 @text_file
@@ -2579,14 +2561,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # the sagepy_rescore branch below (always xgboost, unrelated call),
         # this call site's model choice is config-driven so a job can pick
         # mokapot's own default (linear SVM) or xgboost.
-        (
-            P.mokapot_used_pin,
-            P.mokapot_peptides,
-            P.mokapot_psms,
-            P.mokapot_model_fold_1,
-            P.mokapot_model_fold_2,
-            P.mokapot_model_fold_3,
-        ) = mokapot(
+        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
             P,
             P.sage_results_pin,
             # "" (not None) when unset -- necroflow's dependency-provenance
@@ -2597,7 +2572,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             plugin=(cfg.mokapot.get("plugin", "") if "mokapot" in cfg else ""),
             rt_source=("external" if getattr(P, "predicted_rt", None) is not None else "none"),
             iim_source=("external" if getattr(P, "predicted_iim", None) is not None else "none"),
-            model=(cfg.mokapot.get("model", "") if "mokapot" in cfg else ""),
+            seed=(cfg.mokapot.get("seed", 1) if "mokapot" in cfg else 1),
             xgboost_bagging_n_estimators=(
                 cfg.mokapot.get("xgboost_bagging_n_estimators", 0) if "mokapot" in cfg else 0
             ),
@@ -2629,16 +2604,13 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sagepy_rescore_used_pin,
                 P.sagepy_rescore_peptides,
                 P.sagepy_rescore_psms,
-                P.sagepy_rescore_model_fold_1,
-                P.sagepy_rescore_model_fold_2,
-                P.sagepy_rescore_model_fold_3,
             ) = mokapot(
                 P,
                 P.sagepy_rescore_pin,
                 train_fdr=cfg.sagepy_rescore.get("train_fdr", 0.01),
                 test_fdr=cfg.sagepy_rescore.get("test_fdr", 0.01),
                 plugin="xgboost",
-                model=cfg.sagepy_rescore.get("model", ""),
+                seed=cfg.sagepy_rescore.get("seed", 1),
                 xgboost_bagging_n_estimators=cfg.sagepy_rescore.get(
                     "xgboost_bagging_n_estimators", 0
                 ),
