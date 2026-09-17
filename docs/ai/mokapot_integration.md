@@ -1,6 +1,75 @@
 # Mokapot integration
 
+## Forked mokapot (`git/mokapot`), real CLI restored, model persistence dropped (2026-09-17)
+
+Superseded most of the section below same-day. `scripts/run_mokapot.py` (a
+Python-API reimplementation of the `mokapot` CLI, built to bypass the CLI's
+slow PIN parser) is deleted -- the parser is now fixed at the source instead:
+`git/mokapot` is a real fork (`github.com/MatteoLacki/mokapot`, pinned to a
+`v0.10.0`-based branch `mokapot-necroflow-integration` -- **not** `main`,
+which has since moved to a completely different `OnDiskPsmDataset`/
+`TabularDataReader` architecture incompatible with both this fork's patches
+and `mokapot-xgboost-plugin`'s `Model`/`brew()`-based API). Two patches:
+
+- `read_percolator` now uses DuckDB's CSV reader instead of a hand-rolled
+  line-by-line `str.split` + `pd.DataFrame.from_records` loop -- roughly 2x
+  faster on a real PIN file, verified to produce identical row/column
+  counts, dtypes, and values against the original.
+- `--seed` now actually seeds `brew()`'s own rng (`rng=config.seed` threaded
+  into `main()`'s `brew()` call) -- previously a no-op, since
+  `np.random.seed(config.seed)` only touches the legacy global RNG that
+  `brew()`'s `np.random.default_rng()`-based generator never reads. Verified:
+  two independent real runs with the same `--seed` now produce byte-identical
+  output files.
+
+`Makefile`'s `venvs/mokapot/bin/mokapot` target installs this fork editable
+(`pip install -e git/mokapot`) instead of plain `mokapot` from PyPI.
+
+The real CLI is back in `_mokapot_command` (`venvs/mokapot/bin/mokapot`, not
+`scripts/run_mokapot.py`) -- once the parser and seed were fixed at the
+source, the CLI became strictly better than maintaining a parallel
+reimplementation: less surface to keep in sync (the `--keep_decoys` default
+mismatch bug from the `run_mokapot.py` era couldn't have happened here), and
+any future upstream mokapot fix applies automatically. `mokapot()` is back to
+its original 3-output shape (`used_pin, peptides, psms`) -- the
+`MokapotModelFold1/2/3` NodeTypes and per-fold `Model.save()` calls from the
+`run_mokapot.py` era are removed; not needed in the pipeline for now.
+
+**Seeding, job-config-driven, for every random-state site in this part of
+the pipeline**: new `[mokapot].seed` / `[sagepy_rescore].seed` key (default
+1, matching mokapot's own CLI default -- omitting it changes nothing for
+existing jobs), reused as `--xgboost_seed`/`--lightgbm_seed` too. Three
+independent rng sites, now all covered: `brew()`'s own rng (mokapot core,
+fixed above), and each plugin's estimator `random_state`
+(`mokapot-xgboost-plugin`'s `XGBClassifier`/`BaggingClassifier`,
+`mokapot-lightgbm-plugin`'s `LGBMClassifier`) -- previously none of the three
+estimator classes set `random_state` at all.
+
+**`[mokapot].plugin = "lightgbm"`** is now a real, separate mokapot plugin
+(`git/mokapot-lightgbm-plugin`, sibling package to `mokapot-xgboost-plugin`,
+same `BasePlugin`/entry-point pattern) instead of a `--model` flag inside
+`run_mokapot.py` -- matches mokapot's own native multi-plugin mechanism.
+Same GPU self-detection pattern as documented below (one-time smoke-test
+fit, `LightGBMError` -> CPU fallback), now living in the plugin's own
+`_select_device()` instead of a driver script.
+
+Real F9477 validation after the full rewrite, `jobs/f9477_best.toml -call`,
+only `mokapot` (and its immediate upstream, re-triggered by unrelated
+earlier activity in the node store) re-ran:
+
+| | wall-clock | PSMs (q≤0.01) | peptides | ions |
+|---|---:|---:|---:|---:|
+| xgboost (via real CLI, patched fork) | 46.0s | 99,147 | 31,802 | 34,486 |
+| lightgbm (direct CLI test, same PIN) | 48.2s | 100,931 | 31,999 | 34,682 |
+
+Both land inside the day's established noise band -- consistent with the
+`scripts/run_mokapot.py`-era numbers below, confirming the rewrite changed
+nothing about model behavior, only where the code lives.
+
 ## Model persistence, `[mokapot].model` choice, and GPU (2026-09-17)
+
+**Superseded by the section above, same day** -- kept here as the record of
+what was tried and why it changed, not current behavior.
 
 **Trained fold models are no longer discarded.** `scripts/run_mokapot.py`
 always calls `Model.save()` on each of the 3 fold models after `brew()`
