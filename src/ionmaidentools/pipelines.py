@@ -13,6 +13,7 @@ import json
 import os
 import shlex
 from pathlib import Path
+from typing import NamedTuple
 
 import tomlkit
 
@@ -252,6 +253,33 @@ class DumpedPeptides(NodeType):
     filename = "peptides.parquet"
 
 
+class DumpFragmentIndexBinary(NodeType):
+    filename = "dump_fragment_index"
+
+
+class MassGrid(MmappetDataset):
+    """Precursor x fragment mass occupancy counts, in the flat-column mmappet
+    layout (`schema.txt` + `0.bin` + `shape.txt`) with a `grid.json` sidecar
+    carrying bin parameters and axis labels -- see necromerge2's
+    `scripts/mass_grid.py`."""
+
+    filename = "mass_grid.mmappet"
+
+
+class FragmentIndexGrid(MassGrid):
+    """`MassGrid` of SAGE's own fragment index: peptide monoisotopic mass x
+    fragment neutral mass."""
+
+    filename = "fragment_index_grid.mmappet"
+
+
+class PredictedFragmentGrid(MassGrid):
+    """`MassGrid` of Koina-predicted fragments: precursor m/z (all charges
+    pooled) x predicted fragment m/z."""
+
+    filename = "predicted_fragment_grid.mmappet"
+
+
 class SagepyRescoreConfig(NodeType):
     filename = "sagepy_rescore_config.toml"
 
@@ -318,6 +346,14 @@ class TarGz(NodeType):
 
 class Png(NodeType):
     filename = "plot.png"
+
+
+class MassGridHeatmap(Png):
+    filename = "mass_grid_heatmap.png"
+
+
+class PeptideLengthHistogram(Png):
+    filename = "peptide_length_histogram.png"
 
 
 class FragpipeWorkflow(NodeType):
@@ -594,6 +630,12 @@ def source_sage_binary(path: str):
 def source_dump_peptides_binary(path: str):
     dump_peptides_binary = output(DumpPeptidesBinary)
     return dump_peptides_binary
+
+
+@symlink_file
+def source_dump_fragment_index_binary(path: str):
+    dump_fragment_index_binary = output(DumpFragmentIndexBinary)
+    return dump_fragment_index_binary
 
 
 # Symlinked so edits to the installed-editable module invalidate sage_summarize.
@@ -1128,6 +1170,85 @@ def export_fragment_intensity_for_sage(
     """
     fragment_intensity_for_sage = output(FragmentIntensityForSage)
     return fragment_intensity_for_sage
+
+
+class MassGridVariant(NamedTuple):
+    """One binning + rendering of a `MassGrid`. `binning` is the CLI flag
+    stem both grid builders share: `ppm` (geometric) or `bin-da` (linear)."""
+
+    binning: str
+    bin_width: float
+    color_scale: str
+    vmax_percentile: float
+
+
+MASS_GRID_VARIANTS = {
+    "5ppm": MassGridVariant("ppm", 5.0, "log", 100.0),
+    "10da": MassGridVariant("bin-da", 10.0, "linear", 99.0),
+}
+MASS_GRID_TARGET_PIXELS = 8192
+
+
+@command(
+    "{dump_fragment_index_binary} -f {fasta} -c {dump_peptides_config} -o {grid}"
+    " --{binning} {bin_width} --target-pixels {target_pixels}"
+)
+def bin_fragment_index(
+    fasta: Fasta,
+    dump_peptides_config: DumpPeptidesConfig,
+    dump_fragment_index_binary: DumpFragmentIndexBinary,
+    binning: str,
+    bin_width: float,
+    target_pixels: int,
+):
+    """Build SAGE's fragment index for `fasta` and histogram its target
+    (peptide mass, fragment mass) pairs into a `FragmentIndexGrid`.
+    Independently requestable; nothing in the search consumes it."""
+    grid = output(FragmentIndexGrid)
+    return grid
+
+
+@command(
+    "venvs/featureprediction/bin/python scripts/predicted_fragment_grid.py"
+    " {dumped_peptides} {fragment_intensity_for_sage} {fragment_intensity_cache_path} {grid}"
+    " --min-charge {min_charge} --max-charge {max_charge}"
+    " --{binning} {bin_width} --target-pixels {target_pixels}"
+)
+def bin_predicted_fragments(
+    dumped_peptides: DumpedPeptides,
+    fragment_intensity_for_sage: FragmentIntensityForSage,
+    fragment_intensity_cache_path: str,
+    min_charge: int,
+    max_charge: int,
+    binning: str,
+    bin_width: float,
+    target_pixels: int,
+):
+    """Histogram every cached Koina fragment of this job's target peptides
+    into a `PredictedFragmentGrid`, resolving ranges through the exported
+    pointer index and computing fragment m/z from sequence + annotation id
+    (the cache stores none). Runs in `venvs/featureprediction` for
+    `feature_prediction.fragment_mz`. Independently requestable; requesting
+    it runs `export_fragment_intensity_for_sage`, including its cache fill."""
+    grid = output(PredictedFragmentGrid)
+    return grid
+
+
+@command(
+    "venvs/common/bin/python scripts/mass_grid_heatmap.py {grid} {heatmap}"
+    " --color-scale {color_scale} --vmax-percentile {vmax_percentile}"
+)
+def plot_mass_grid(grid: MassGrid, color_scale: str, vmax_percentile: float):
+    heatmap = output(MassGridHeatmap)
+    return heatmap
+
+
+@command(
+    "venvs/common/bin/python scripts/peptide_length_histogram.py {dumped_peptides} {histogram}"
+)
+def plot_peptide_length_histogram(dumped_peptides: DumpedPeptides):
+    histogram = output(PeptideLengthHistogram)
+    return histogram
 
 
 def _run_sage_command(args: CommandArgs) -> str:
@@ -1773,6 +1894,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.dump_peptides_binary = source_dump_peptides_binary(
         P, path="git/sage/target/release/dump_peptides"
     )
+    P.dump_fragment_index_binary = source_dump_fragment_index_binary(
+        P, path="git/sage/target/release/dump_fragment_index"
+    )
 
     # Raw Extraction
     P.ms1_events = tdf2ms1(P, P.tdf)
@@ -1977,6 +2101,42 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
             fragmentation_type=_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE,
         )
+
+        # Request-only diagnostics over the digest and both fragment indices;
+        # labels are `<source>_grid_<variant>` / `<source>_heatmap_<variant>`.
+        P.peptide_length_histogram = plot_peptide_length_histogram(P, P.dumped_peptides)
+        for variant_name, variant in MASS_GRID_VARIANTS.items():
+            binning = dict(
+                binning=variant.binning,
+                bin_width=variant.bin_width,
+                target_pixels=MASS_GRID_TARGET_PIXELS,
+            )
+            grids = {
+                "fragment_index": bin_fragment_index(
+                    P,
+                    P.fasta,
+                    P.dump_peptides_config,
+                    P.dump_fragment_index_binary,
+                    **binning,
+                ),
+                "predicted_fragment": bin_predicted_fragments(
+                    P,
+                    P.dumped_peptides,
+                    P.fragment_intensity_for_sage,
+                    fragment_intensity_cache_path=_fragment_intensity_cache_path,
+                    min_charge=_fragment_min_charge,
+                    max_charge=_fragment_max_charge,
+                    **binning,
+                ),
+            }
+            for source, grid in grids.items():
+                P[f"{source}_grid_{variant_name}"] = grid
+                P[f"{source}_heatmap_{variant_name}"] = plot_mass_grid(
+                    P,
+                    grid,
+                    color_scale=variant.color_scale,
+                    vmax_percentile=variant.vmax_percentile,
+                )
 
         # `[fragment_intensity]` (presence-only table) is the on/off switch
         # for actually feeding the cache above into search -- without this

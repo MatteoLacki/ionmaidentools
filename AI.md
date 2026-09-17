@@ -63,6 +63,7 @@ measurements for each feature live in `docs/ai/`, one file per topic:
 | `docs/ai/run_sage_merge.md` | `run_sage`/`run_sage_with_predicted` merged into one mixed-Node/value rule |
 | `docs/ai/mokapot_integration.md` | Config-driven mokapot plugin, leakage-safe PIN filtering, real F9477 ablation-grid measurements |
 | `docs/ai/rt_iim_caching.md` | `predict_rt`/`predict_iim`'s `PredictionCache` wiring, necroflow gotchas, measured payoff |
+| `docs/ai/mass_grid_plots.md` | Request-only mass-grid heatmaps (SAGE index, Koina predictions) and peptide length histogram; why the Koina builder computes fragment m/z |
 | `docs/ai/bestrun.md` | `jobs/f9477_best.toml` — the standing best-known-config job, current numbers, and the ask-before-updating rule |
 
 Check freshness against `git log` on the file(s) a `docs/ai/*.md` entry names if something
