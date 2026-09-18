@@ -417,6 +417,24 @@ external-prediction column pair — if any — the safe-PIN filter includes;
 exists for this job, `"none"` otherwise) threaded through
 `_mokapot_command`'s existing Python-callback pattern.
 
+## sagepy_rescore branch removed (2026-09-18)
+
+The whole second `mokapot(...)` call site (`SagepyRescoreConfig`/
+`SagepyRescorePredictions`/`SagepyRescorePin` NodeTypes,
+`write_sagepy_rescore_config`/`run_sagepy_rescore_predict`/
+`write_sagepy_rescore_pin` rules, the `if "sagepy_rescore" in cfg:` block)
+is gone — `git/sagepy`/`git/sagepy-rescore`/`git/sagepy_ionmaiden_adapter`
+were dropped from the project entirely (nothing in the live pipeline used
+sagepy, and a prior evaluation had already found sagepy-rescore's
+xgboost/rbf-svm rescoring "not worth it — GPU needed, poor results"; see
+`plans/sagepy-rescore.md`). This corrects two now-stale claims above: the
+"sagepy_rescore branch's own separate call is untouched" note under
+`[mokapot].plugin` no longer applies (there is no second call), and
+`--mode passthrough` has no live caller today — the plain-SAGE-PIN call
+site always passes `rt_source`/`iim_source`, i.e. always resolves to `--mode
+sage`. `passthrough` is left in `scripts/mokapot_pin_adapter.py` as a
+generic default, not removed.
+
 ## Real F9477 measurements: mode-3 + fragment-intensity + mokapot (2026-08-31)
 
 Full 2x2x3 ablation grid (`jobs/f9477_ablation/`: RT+IIM on/off x

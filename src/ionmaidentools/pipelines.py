@@ -283,18 +283,6 @@ class PredictedFragmentGrid(MassGrid):
     filename = "predicted_fragment_grid.mmappet"
 
 
-class SagepyRescoreConfig(NodeType):
-    filename = "sagepy_rescore_config.toml"
-
-
-class SagepyRescorePredictions(NodeType):
-    filename = "psms_with_predictions.parquet"
-
-
-class SagepyRescorePin(Pin):
-    filename = "sagepy_rescore.pin"
-
-
 class MokapotUsedPin(NodeType):
     filename = "used.pin"
 
@@ -1601,17 +1589,13 @@ _MOKAPOT_FOLDS = 3
 
 def _mokapot_command(args: CommandArgs) -> str:
     """Python command callback, not a static template -- lets `--plugin`
-    be added conditionally (empty for the plain-Sage-PIN call, `--plugin
-    xgboost` for the sagepy-rescore call) without necroflow's string-
-    template placeholders needing to express a conditional substring.
-    Same reasoning for `--mode`/`--rt-source`/`--iim-source`: only the
-    plain-Sage-PIN call passes `rt_source`/`iim_source`, which selects
-    `scripts/mokapot_pin_adapter.py --mode sage` (its leakage-safe feature
-    registry, see `plans/mokapot_leakage_safe_pin.md`); the sagepy-rescore
-    call passes neither, so the adapter defaults to `--mode passthrough`
-    (its original, unchanged, FileName-drop-only behavior) -- that PIN is
-    already leakage-filtered upstream by
-    `sagepy_rescore.features.build_feature_frame`.
+    be added conditionally without necroflow's string-template placeholders
+    needing to express a conditional substring. Same reasoning for
+    `--mode`/`--rt-source`/`--iim-source`: passing `rt_source`/`iim_source`
+    selects `scripts/mokapot_pin_adapter.py --mode sage` (its leakage-safe
+    feature registry, see `plans/mokapot_leakage_safe_pin.md`); omitting
+    both leaves the adapter at its default `--mode passthrough` (original,
+    unchanged, FileName-drop-only behavior).
 
     Calls the real `mokapot` CLI binary, not a Python-API wrapper --
     `git/mokapot` (our fork, pinned to a `v0.10.0`-based branch) patches
@@ -1709,46 +1693,6 @@ def mokapot(
     peptides = output(MokapotPeptides)
     psms = output(MokapotPsms)
     return used_pin, peptides, psms
-
-
-@text_file
-def write_sagepy_rescore_config(text: str):
-    config = output(SagepyRescoreConfig)
-    return config
-
-
-def _sagepy_rescore_prediction_config(config: dict) -> dict:
-    """Remove settings owned by the downstream mokapot rule."""
-    prediction_config = dict(config)
-    prediction_config.pop("train_fdr", None)
-    prediction_config.pop("test_fdr", None)
-    return prediction_config
-
-
-@command(
-    "venvs/sagepy_rescore/bin/sagepy-rescore-from-sage"
-    " --psms-parquet {sage_results_tsv} --matched-fragments-parquet {sage_matched_fragments}"
-    " --output {workdir}"
-    " --with-predictors --predict-only"
-    " --config {config}"
-    " && test -f {predictions}"
-)
-def run_sagepy_rescore_predict(
-    sage_results_tsv: SageResultsTsv,
-    sage_matched_fragments: SageMatchedFragments,
-    config: SagepyRescoreConfig,
-):
-    predictions = output(SagepyRescorePredictions)
-    return predictions
-
-
-@command(
-    "venvs/sagepy_rescore/bin/python scripts/write_sagepy_rescore_pin.py"
-    " -i {predictions} -o {pin}"
-)
-def write_sagepy_rescore_pin(predictions: SagepyRescorePredictions):
-    pin = output(SagepyRescorePin)
-    return pin
 
 
 @command("venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}")
@@ -2557,10 +2501,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # default. `rt_source`/`iim_source` "external" exactly when that
         # dimension's real external-prediction Node exists for this job --
         # see `plans/mokapot_leakage_safe_pin.md`.
-        # `[mokapot].plugin` (optional, e.g. `plugin = "xgboost"`) -- unlike
-        # the sagepy_rescore branch below (always xgboost, unrelated call),
-        # this call site's model choice is config-driven so a job can pick
-        # mokapot's own default (linear SVM) or xgboost.
+        # `[mokapot].plugin` (optional, e.g. `plugin = "xgboost"`) --
+        # config-driven so a job can pick mokapot's own default (linear SVM)
+        # or xgboost.
         P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
             P,
             P.sage_results_pin,
@@ -2583,42 +2526,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 cfg.mokapot.get("xgboost_bagging_seed", 0) if "mokapot" in cfg else 0
             ),
         )
-
-        if "sagepy_rescore" in cfg:
-            prediction_config = _sagepy_rescore_prediction_config(
-                cfg.sagepy_rescore
-            )
-            P.sagepy_rescore_config = write_sagepy_rescore_config(
-                P, text=tomlkit.dumps(prediction_config)
-            )
-            P.sagepy_rescore_predictions = run_sagepy_rescore_predict(
-                P,
-                P.sage_results_tsv,
-                P.sage_matched_fragments,
-                P.sagepy_rescore_config,
-            )
-            P.sagepy_rescore_pin = write_sagepy_rescore_pin(
-                P, P.sagepy_rescore_predictions
-            )
-            (
-                P.sagepy_rescore_used_pin,
-                P.sagepy_rescore_peptides,
-                P.sagepy_rescore_psms,
-            ) = mokapot(
-                P,
-                P.sagepy_rescore_pin,
-                train_fdr=cfg.sagepy_rescore.get("train_fdr", 0.01),
-                test_fdr=cfg.sagepy_rescore.get("test_fdr", 0.01),
-                plugin="xgboost",
-                seed=cfg.sagepy_rescore.get("seed", 1),
-                xgboost_bagging_n_estimators=cfg.sagepy_rescore.get(
-                    "xgboost_bagging_n_estimators", 0
-                ),
-                xgboost_bagging_max_samples=cfg.sagepy_rescore.get(
-                    "xgboost_bagging_max_samples", 30_000
-                ),
-                xgboost_bagging_seed=cfg.sagepy_rescore.get("xgboost_bagging_seed", 0),
-            )
 
         # FDR Summary
         P.sage_summary = sage_summarize(
