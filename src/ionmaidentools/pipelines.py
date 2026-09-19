@@ -970,8 +970,12 @@ def write_recalibration_config(text: str):
     return config
 
 
+# numba `parallel=True` kernels take every core unless told otherwise, so these
+# two declare all cores to the scheduler and pin numba to exactly that.
 @command(
-    "venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tdf} {output_pmsms}"
+    "NUMBA_NUM_THREADS={threads}"
+    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tdf} {output_pmsms}",
+    threads=CORES,
 )
 def materialize_pmsms_mz(input_pmsms: Pmsms, tdf: BrukerD):
     output_pmsms = output(MzPmsms)
@@ -979,8 +983,10 @@ def materialize_pmsms_mz(input_pmsms: Pmsms, tdf: BrukerD):
 
 
 @command(
-    "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments} {mz_pmsms}"
-    " {precursors} {output_pmsms} {mz_recalibration} {tolerance} {plot} --config {config} --fdr {fdr}"
+    "NUMBA_NUM_THREADS={threads}"
+    " venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments} {mz_pmsms}"
+    " {precursors} {output_pmsms} {mz_recalibration} {tolerance} {plot} --config {config} --fdr {fdr}",
+    threads=CORES,
 )
 def recalibrate_pmsms_mz(
     sage_results_tsv: SageResultsTsv,
