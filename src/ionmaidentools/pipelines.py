@@ -701,7 +701,7 @@ def write_scale_estimation_config(text: str):
     return config
 
 
-@command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}")
+@command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}", threads=CORES)
 def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
     argmaxes = output(ArgmaxSample)
     stats = output(ArgmaxSieveStats)
@@ -710,7 +710,8 @@ def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
 
 @command(
     "venvs/common/bin/ms1_extract_sample_tensors {ms1} {argmaxes} {config} {tensors}"
-)
+,
+    threads=CORES)
 def extract_ms1_sample_tensors(
     ms1: Ms1Events, argmaxes: ArgmaxSample, config: ScaleEstimationConfig
 ):
@@ -720,7 +721,8 @@ def extract_ms1_sample_tensors(
 
 @command(
     "venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {stats} {tensors} {config} {scales}"
-)
+,
+    threads=CORES)
 def fit_ms1_scale_estimates(
     argmaxes: ArgmaxSample,
     stats: ArgmaxSieveStats,
@@ -745,7 +747,8 @@ def write_precursor_candidate_selection_config(text: str):
 
 @command(
     "venvs/common/bin/ms1_count_candidate_neighbors {ms1} {scale_estimates} {config} {features}"
-)
+,
+    threads=CORES)
 def count_candidate_neighbors(
     ms1: Ms1Events,
     scale_estimates: ScaleEstimates,
@@ -757,7 +760,8 @@ def count_candidate_neighbors(
 
 @command(
     "venvs/common/bin/ms1_score_candidates {ms1} {scale_estimates} {features} {config} {clusters}"
-)
+,
+    threads=CORES)
 def score_candidates(
     ms1: Ms1Events,
     scale_estimates: ScaleEstimates,
@@ -782,7 +786,8 @@ def write_postprocessing_config(text: str):
 
 @command(
     "venvs/common/bin/ms1_annotate_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {annotated}"
-)
+,
+    threads=CORES)
 def annotate_precursor_clusters(
     tdf: BrukerD,
     ms1: Ms1Events,
@@ -796,7 +801,8 @@ def annotate_precursor_clusters(
 
 @command(
     "venvs/common/bin/ms1_decharge_candidates {tdf} {ms1} {annotated} {config} {clusters}"
-)
+,
+    threads=CORES)
 def decharge_precursor_clusters(
     tdf: BrukerD,
     ms1: Ms1Events,
@@ -817,7 +823,8 @@ def write_precursor_transmission_config(text: str):
     "venvs/common/bin/transmit_precursors {tdf} {clusters} {config} {transpec}"
     " --output-precursors {precursors} --verbose"
     " && test -f {transpec}/schema.txt"
-)
+,
+    threads=CORES)
 def transmit_precursors_into_fragment_space(
     tdf: BrukerD,
     clusters: PostprocessedPrecursorClusters,
@@ -830,7 +837,8 @@ def transmit_precursors_into_fragment_space(
 
 @command(
     "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
-)
+,
+    threads=CORES)
 def filter_first_precursors(precursors: TransmittedPrecursorClusters, filter: str):
     filtered = output(FirstFilterPrecursors)
     return filtered
@@ -869,7 +877,8 @@ def run_mkpmsms_binary(
 
 @command(
     "venvs/common/bin/cut_and_index_precursors {filter_mm} {pmsms}/dataindex.mmappet {precursors}"
-)
+,
+    threads=CORES)
 def cut_and_index_precursors(filter_mm: FirstFilterPrecursors, pmsms: Pmsms):
     precursors = output(Ms2IndexedPrecursors)
     return precursors
@@ -877,7 +886,8 @@ def cut_and_index_precursors(filter_mm: FirstFilterPrecursors, pmsms: Pmsms):
 
 @command(
     "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
-)
+,
+    threads=CORES)
 def filter_pre_sage_precursors(precursors: Ms2IndexedPrecursors, filter: str):
     filtered = output(PreSageFilteredPrecursors)
     return filtered
@@ -955,7 +965,8 @@ def write_recalibration_precursor_selection_config(text: str):
 @command(
     "venvs/common/bin/python -m timstofu.cli.select_recalibration_precursors"
     " {precursors} {config} {selected}"
-)
+,
+    threads=CORES)
 def select_recalibration_precursors(
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationPrecursorSelectionConfig,
@@ -1006,7 +1017,8 @@ def recalibrate_pmsms_mz(
 @command(
     "venvs/common/bin/recalibrate-precursors {sage_results_tsv} {precursors}"
     " {output_precursors} {tolerance} {plot} {model} --config {config} --fdr {fdr}"
-)
+,
+    threads=CORES)
 def recalibrate_precursors(
     sage_results_tsv: SageResultsTsv,
     precursors: PreSageFilteredPrecursors,
@@ -1075,7 +1087,8 @@ def write_fragment_index_config(text: str):
 
 @command(
     "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} -o {peptides}"
-)
+,
+    threads=CORES)
 def dump_peptides(
     fasta: Fasta,
     dump_peptides_config: DumpPeptidesConfig,
@@ -1142,7 +1155,8 @@ def _cache_root() -> Path:
     " && venvs/featureprediction/bin/feature-prediction-export-fragments-for-sage"
     " {dumped_peptides} {fragment_intensity_cache_path} {fragment_intensity_for_sage}"
     " --min-charge {min_charge} --max-charge {max_charge} --collision-energy {collision_energy}"
-)
+,
+    threads=CORES)
 def export_fragment_intensity_for_sage(
     dumped_peptides: DumpedPeptides,
     fragment_intensity_cache_path: str,
@@ -1195,7 +1209,8 @@ MASS_GRID_TARGET_PIXELS = 8192
 @command(
     "{dump_fragment_index_binary} -f {fasta} -c {fragment_index_config} -o {grid}"
     " --{binning} {bin_width} --target-pixels {target_pixels}"
-)
+,
+    threads=CORES)
 def bin_fragment_index(
     fasta: Fasta,
     fragment_index_config: FragmentIndexConfig,
@@ -1395,7 +1410,8 @@ def _server_url_arg(value: str | list[str] | None, default: str) -> str:
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
     " --cache-path {rt_cache_path}"
-)
+,
+    threads=CORES)
 def predict_rt(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
@@ -1425,7 +1441,8 @@ def predict_rt(
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
     " --cache-path {iim_cache_path}"
-)
+,
+    threads=CORES)
 def predict_iim(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
@@ -1457,7 +1474,8 @@ def predict_iim(
     " {output_precursors} {rt_tolerance} {rt_model} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}"
-)
+,
+    threads=CORES)
 def correct_precursors_rt(
     sage_results_tsv: SageResultsTsv,
     predicted_rt: PredictedRt,
@@ -1482,7 +1500,8 @@ def correct_precursors_rt(
     " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}"
-)
+,
+    threads=CORES)
 def correct_precursors_iim(
     sage_results_tsv: SageResultsTsv,
     predicted_iim: PredictedIim,
@@ -1644,13 +1663,11 @@ def _mokapot_command(args: CommandArgs) -> str:
     workdir = shlex.quote(str(args.workdir))
     plugin_flag = f" --plugin {args.config.plugin}" if args.config.plugin else ""
 
-    # sched_getaffinity respects cgroup/taskset core limits (e.g. under
-    # Docker, see `docker_present.sh`); cpu_count() ignores them and would
-    # oversubscribe a constrained container.
-    if hasattr(os, "sched_getaffinity"):
-        n_cores = len(os.sched_getaffinity(0))
-    else:
-        n_cores = os.cpu_count() or 1
+    # The threads this call was actually granted, not the machine's core
+    # count: mokapot fans out to `max_workers` fold processes, each running
+    # its own `--*_n_jobs`-wide plugin fit, so reading the machine here would
+    # oversubscribe whatever else the scheduler is running alongside it.
+    n_cores = max(1, int(args.constraints.threads))
     max_workers = min(_MOKAPOT_FOLDS, n_cores)
     per_fit_jobs = max(1, n_cores // max_workers)
 
@@ -1682,7 +1699,7 @@ def _mokapot_command(args: CommandArgs) -> str:
     )
 
 
-@command(_mokapot_command)
+@command(_mokapot_command, threads=CORES)
 def mokapot(
     pin: Pin,
     train_fdr: float = 0.05,
