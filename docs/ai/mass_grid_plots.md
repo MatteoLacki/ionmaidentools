@@ -16,7 +16,7 @@ with only `.requests` changed.
 | `predicted_fragment_grid_<v>` | `bin_predicted_fragments` | Koina predictions: precursor m/z (charges pooled) x fragment m/z |
 | `fragment_index_heatmap_<v>` / `predicted_fragment_heatmap_<v>` | `plot_mass_grid` | PNG of the matching grid |
 
-`<v>` is a key of `MASS_GRID_VARIANTS`, fixed in the factory rather than job
+`<v>` is a key of `MASS_GRID_VARIANTS`, fixed in the workflow rather than job
 config (no job has needed another): `5ppm` (geometric 5 ppm bins folded to
 <= 8192 cells per axis, log colour) and `10da` (linear 10 Da bins, linear
 colour capped at the 99th percentile of occupied cells). Both builders take

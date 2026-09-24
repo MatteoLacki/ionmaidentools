@@ -9,7 +9,7 @@ tuple) no longer exists — `run_sage` itself now takes
 (`docs/rules.md`) added after the original RT/IIM independent-dimensions
 split (see `recalibration_modes.md`). One rule now covers pass-1/mode-1/mode-2
 (neither prediction, `predicted_rt`/`predicted_iim` simply omitted) and mode
-3's final pass (either/both, passed as real Nodes) — the pipeline factory's
+3's final pass (either/both, passed as real Nodes) — the workflow's
 mode-3 `else` branches assign `P.predicted_rt = None`/`P.predicted_iim = None`
 directly (a plain Python attribute, not a DAG edge — confirmed safe by reading
 `Pipeline.__setattr__` itself: non-`Node` values always fall through to a

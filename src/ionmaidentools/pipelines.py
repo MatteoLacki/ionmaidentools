@@ -26,6 +26,7 @@ from necroflow import (
     output,
     symlink_file,
     text_file,
+    workflow,
 )
 
 CORES = os.cpu_count() or 1
@@ -497,7 +498,7 @@ class FragmentIntensityForSage(NodeType):
 class NoPrediction(NodeType):
     """Zero-cost sentinel standing in for `RtTolerance`/`MobilityTolerance`
     when that dimension isn't active (`[recalibration.rt]`/
-    `[recalibration.iim]` absent, 2026-08-25 -- see the pipeline factory).
+    `[recalibration.iim]` absent, 2026-08-25 -- see `ionmaiden_pipeline`).
     `update_sage_config_rt_iim` always takes both RT and IIM
     `rt_tolerance`/`mobility_tolerance` params (plain required `NodeType`s,
     not mixed Node/`None`); this stands in for whichever one wasn't
@@ -508,7 +509,7 @@ class NoPrediction(NodeType):
     (2026-08-26). Only `update_sage_config_rt_iim`'s inputs still need this
     sentinel -- out of scope for that merge, see `run_sage`'s docstring.
     (necroflow *does* support skipping a rule entirely via plain `if/else`
-    branching in the pipeline factory -- see its `docs/rules.md`'s
+    branching in the workflow -- see its `docs/rules.md`'s
     "Conditional pipelines" -- but here RT/IIM are independently optional,
     so properly avoiding this sentinel too would mean up to 3 separate
     `update_sage_config_rt_iim` rule variants instead of one with a
@@ -1347,7 +1348,7 @@ def run_sage(
     `predicted_fragment_intensity_index` (a mixed Node/`None` input) and
     `fragment_intensity_cache_path` (a plain config path, since the shared
     cache is no longer a node -- see `_DEFAULT_CACHE_ROOT`) are both-or-
-    neither, gated by `"fragment_intensity" in cfg` at the pipeline-factory
+    neither, gated by `"fragment_intensity" in cfg` at the workflow
     call site, not by anything in this function. The path defaults to `""`
     rather than `None` because config values are serialized into the node's
     `dependencies.toml` and TOML has no null; only the index input decides
@@ -1536,7 +1537,7 @@ def _update_sage_config_rt_iim_command(args: CommandArgs) -> str:
     2026-08-26 `run_sage` merge, see that function's docstring. Only the active
     dimension's `config_set` calls actually run -- decided by the scalar
     `dimensions` config, never by inspecting file content. In practice
-    `dimensions` is never empty here (the pipeline factory only calls this
+    `dimensions` is never empty here (the workflow only calls this
     rule inside `if "rt" in cfg.recalibration or "iim" in cfg.recalibration:`,
     which always sets at least one dimension), but a plain copy-through is
     a safe fallback.
@@ -1920,46 +1921,46 @@ def summarize_fragpipe(log: FragpipeLog):
     return summary
 
 
+@workflow
 def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     """Main IonMaiden pipeline."""
     cfg = DotDict.Recursive(config)
-    P.pipeline_config = write_pipeline_config(P, text=tomlkit.dumps(config))
+    P.pipeline_config = write_pipeline_config(text=tomlkit.dumps(config))
 
     # Acquisition
-    P.tdf = source_bruker_d(P, path=cfg.tdf_path)
-    P.fasta = source_fasta(P, path=cfg.fasta_path)
+    P.tdf = source_bruker_d(path=cfg.tdf_path)
+    P.fasta = source_fasta(path=cfg.fasta_path)
     P.mkpmsms_binary = source_mkpmsms_binary(
-        P, path="git/ionmaidenmetal/build/mkpmsms"
+        path="git/ionmaidenmetal/build/mkpmsms"
     )
     P.sage_summarize_module = source_sage_summarize_module(
-        P, path="git/searchops/src/searchops/sage.py"
+        path="git/searchops/src/searchops/sage.py"
     )
-    P.sage_binary = source_sage_binary(P, path="git/sage/target/release/sage")
+    P.sage_binary = source_sage_binary(path="git/sage/target/release/sage")
     P.dump_peptides_binary = source_dump_peptides_binary(
-        P, path="git/sage/target/release/dump_peptides"
+        path="git/sage/target/release/dump_peptides"
     )
     P.dump_fragment_index_binary = source_dump_fragment_index_binary(
-        P, path="git/sage/target/release/dump_fragment_index"
+        path="git/sage/target/release/dump_fragment_index"
     )
 
     # Raw Extraction
-    P.ms1_events = tdf2ms1(P, P.tdf)
-    P.ms2_events = tdf2ms2(P, P.tdf)
-    P.ms2_tfs_events = tdf2ms2_tfs(P, P.tdf)
-    P.ms2_tsf_events = tdf2ms2_tsf(P, P.tdf)
+    P.ms1_events = tdf2ms1(P.tdf)
+    P.ms2_events = tdf2ms2(P.tdf)
+    P.ms2_tfs_events = tdf2ms2_tfs(P.tdf)
+    P.ms2_tsf_events = tdf2ms2_tsf(P.tdf)
 
     # MS1 Scale Calibration
     P.scale_estimation_config = write_scale_estimation_config(
-        P, text=tomlkit.dumps(cfg.scale_estimation)
+        text=tomlkit.dumps(cfg.scale_estimation)
     )
     P.argmaxes, P.argmax_sieve_stats = find_ms1_argmaxes(
-        P, P.ms1_events, P.scale_estimation_config
+        P.ms1_events, P.scale_estimation_config
     )
     P.sample_tensors = extract_ms1_sample_tensors(
-        P, P.ms1_events, P.argmaxes, P.scale_estimation_config
+        P.ms1_events, P.argmaxes, P.scale_estimation_config
     )
     P.scale_estimates = fit_ms1_scale_estimates(
-        P,
         P.argmaxes,
         P.argmax_sieve_stats,
         P.sample_tensors,
@@ -1968,19 +1969,17 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     # Precursor Selection
     P.precursor_neighbor_count_config = write_precursor_neighbor_count_config(
-        P, text=tomlkit.dumps(cfg.precursor_neighbor_count)
+        text=tomlkit.dumps(cfg.precursor_neighbor_count)
     )
     P.precursor_candidate_selection_config = write_precursor_candidate_selection_config(
-        P, text=tomlkit.dumps(cfg.precursor_candidate_selection)
+        text=tomlkit.dumps(cfg.precursor_candidate_selection)
     )
     P.raw_candidate_features = count_candidate_neighbors(
-        P,
         P.ms1_events,
         P.scale_estimates,
         P.precursor_neighbor_count_config,
     )
     P.raw_precursor_clusters = score_candidates(
-        P,
         P.ms1_events,
         P.scale_estimates,
         P.raw_candidate_features,
@@ -1989,13 +1988,12 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     # Precursor Postprocessing
     P.precursor_annotation_config = write_precursor_annotation_config(
-        P, text=tomlkit.dumps(cfg.precursor_annotation)
+        text=tomlkit.dumps(cfg.precursor_annotation)
     )
     P.postprocessing_config = write_postprocessing_config(
-        P, text=tomlkit.dumps(cfg.postprocessing_of_precursors)
+        text=tomlkit.dumps(cfg.postprocessing_of_precursors)
     )
     P.annotated_precursor_clusters = annotate_precursor_clusters(
-        P,
         P.tdf,
         P.ms1_events,
         P.raw_precursor_clusters,
@@ -2003,7 +2001,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.precursor_annotation_config,
     )
     P.postprocessed_precursor_clusters = decharge_precursor_clusters(
-        P,
         P.tdf,
         P.ms1_events,
         P.annotated_precursor_clusters,
@@ -2012,11 +2009,10 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     # Precursor Transmission
     P.precursor_transmission_config = write_precursor_transmission_config(
-        P, text=tomlkit.dumps(cfg.precursor_transmission)
+        text=tomlkit.dumps(cfg.precursor_transmission)
     )
     P.transmitted_ms1events, P.transmitted_precursor_clusters = (
         transmit_precursors_into_fragment_space(
-            P,
             P.tdf,
             P.postprocessed_precursor_clusters,
             P.precursor_transmission_config,
@@ -2024,15 +2020,13 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     )
 
     P.first_filter_precursors = filter_first_precursors(
-        P,
         P.transmitted_precursor_clusters,
         filter=cfg.precursor_filters.mkpmsms.get("filter", ""),
     )
 
     # Pseudo-MS/MS Assembly
-    P.pseudomsms_config = write_pseudomsms_config(P, text=tomlkit.dumps(cfg.pseudomsms))
+    P.pseudomsms_config = write_pseudomsms_config(text=tomlkit.dumps(cfg.pseudomsms))
     P.pmsms = run_mkpmsms_binary(
-        P,
         P.mkpmsms_binary,
         P.ms2_events,
         P.transmitted_ms1events,
@@ -2042,11 +2036,10 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     # Precursor Indexing
     P.ms2indexed_precursors = cut_and_index_precursors(
-        P, P.first_filter_precursors, P.pmsms
+        P.first_filter_precursors, P.pmsms
     )
 
     P.pre_sage_filtered_precursors = filter_pre_sage_precursors(
-        P,
         P.ms2indexed_precursors,
         filter=cfg.precursor_filters.pre_sage.get("filter", ""),
     )
@@ -2054,16 +2047,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # Neighbor Graph
     if "precursor_neighbors" in cfg:
         P.precursor_neighbors_config = write_precursor_neighbors_config(
-            P, text=tomlkit.dumps(cfg.precursor_neighbors)
+            text=tomlkit.dumps(cfg.precursor_neighbors)
         )
         P.precursor_grid_index = build_precursor_grid_index(
-            P,
             P.pre_sage_filtered_precursors,
             P.tdf,
             P.precursor_neighbors_config,
         )
         P.precursor_neighbors_csr = compute_precursor_neighbors(
-            P,
             P.precursor_grid_index,
             P.tdf,
             P.precursor_neighbors_config,
@@ -2077,10 +2068,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     # ToF Score Filtering
     if "tof_score_filter" in cfg:
-        P.neighbor_score = tof_score_filter(P, P.pmsms, P.precursor_neighbors_csr)
+        P.neighbor_score = tof_score_filter(P.pmsms, P.precursor_neighbors_csr)
 
         P.search_pmsms, P.search_precursors = materialize_tof_filtered_pmsms(
-            P,
             P.pmsms,
             P.pre_sage_filtered_precursors,
             P.neighbor_score,
@@ -2090,7 +2080,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.search_pmsms = P.pmsms
         P.search_precursors = P.pre_sage_filtered_precursors
 
-    P.search_mz_pmsms = materialize_pmsms_mz(P, P.search_pmsms, P.tdf)
+    P.search_mz_pmsms = materialize_pmsms_mz(P.search_pmsms, P.tdf)
     current_mz_pmsms = P.search_mz_pmsms
     current_precursors = P.search_precursors
 
@@ -2098,7 +2088,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     if "sage" in cfg:
         P.sage_config = write_sage_config(
-            P, text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
+            text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
         )
 
         # Derived straight from `cfg.sage.database` (not sliced out of the
@@ -2124,13 +2114,13 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             "min_ion_index": database["min_ion_index"],
         }
         P.dump_peptides_config = write_dump_peptides_config(
-            P, text=json.dumps(dump_peptides_database, sort_keys=True, indent=2) + "\n"
+            text=json.dumps(dump_peptides_database, sort_keys=True, indent=2) + "\n"
         )
         P.fragment_index_config = write_fragment_index_config(
-            P, text=json.dumps(fragment_index_database, sort_keys=True, indent=2) + "\n"
+            text=json.dumps(fragment_index_database, sort_keys=True, indent=2) + "\n"
         )
         P.dumped_peptides = dump_peptides(
-            P, P.fasta, P.dump_peptides_config, P.dump_peptides_binary
+            P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
 
         # Shared prediction caches, addressed by path rather than produced by
@@ -2157,7 +2147,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # would have covered.
         _fragment_min_charge, _fragment_max_charge = cfg.sage.get("precursor_charge", (2, 4))
         P.fragment_intensity_for_sage = export_fragment_intensity_for_sage(
-            P,
             P.dumped_peptides,
             fragment_intensity_cache_path=_fragment_intensity_cache_path,
             min_charge=_fragment_min_charge,
@@ -2168,7 +2157,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
         # Request-only diagnostics over the digest and both fragment indices;
         # labels are `<source>_grid_<variant>` / `<source>_heatmap_<variant>`.
-        P.peptide_length_histogram = plot_peptide_length_histogram(P, P.dumped_peptides)
+        P.peptide_length_histogram = plot_peptide_length_histogram(P.dumped_peptides)
         for variant_name, variant in MASS_GRID_VARIANTS.items():
             binning = dict(
                 binning=variant.binning,
@@ -2177,14 +2166,12 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             )
             grids = {
                 "fragment_index": bin_fragment_index(
-                    P,
                     P.fasta,
                     P.fragment_index_config,
                     P.dump_fragment_index_binary,
                     **binning,
                 ),
                 "predicted_fragment": bin_predicted_fragments(
-                    P,
                     P.dumped_peptides,
                     P.fragment_intensity_for_sage,
                     fragment_intensity_cache_path=_fragment_intensity_cache_path,
@@ -2196,7 +2183,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             for source, grid in grids.items():
                 P[f"{source}_grid_{variant_name}"] = grid
                 P[f"{source}_heatmap_{variant_name}"] = plot_mass_grid(
-                    P,
                     grid,
                     color_scale=variant.color_scale,
                     vmax_percentile=variant.vmax_percentile,
@@ -2226,17 +2212,15 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             otherwise. Kept as a plain closure over `P`/`cfg`, not a new
             necroflow rule -- it only groups three existing rule calls."""
             P.confident_psms = filter_sage_results(
-                P, P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+                P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
             )
             P.sage_pmsms_mapping = sage_map_to_pmsms(
-                P,
                 P.confident_psms,
                 P.sage_matched_fragments,
                 search_precursors,
                 mz_pmsms,
             )
             P.score_comparison = score_comparison(
-                P,
                 search_precursors,
                 search_pmsms,
                 P.sage_pmsms_mapping,
@@ -2246,11 +2230,10 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
                 write_recalibration_precursor_selection_config(
-                    P, text=tomlkit.dumps(cfg.recalibration_precursor_selection)
+                    text=tomlkit.dumps(cfg.recalibration_precursor_selection)
                 )
             )
             P.recalibration_precursors = select_recalibration_precursors(
-                P,
                 P.search_precursors,
                 P.recalibration_precursor_selection_config,
             )
@@ -2260,7 +2243,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
             ) = run_sage(
-                P,
                 P.search_mz_pmsms,
                 P.recalibration_precursors,
                 P.fasta,
@@ -2268,7 +2250,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_binary,
             )
             P.recalibration_config = write_recalibration_config(
-                P, text=tomlkit.dumps(cfg.recalibration)
+                text=tomlkit.dumps(cfg.recalibration)
             )
             (
                 P.recalibrated_mz_pmsms,
@@ -2276,7 +2258,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fragment_mz_search_tolerance,
                 P.fragment_mz_recalibration_fit_plot,
             ) = recalibrate_pmsms_mz(
-                P,
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
                 P.search_mz_pmsms,
@@ -2290,14 +2271,13 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.precursor_mz_recalibration_fit_plot,
                 P.precursro_mz_recalibration_model_serialization,
             ) = recalibrate_precursors(
-                P,
                 P.filtered_sage_results_tsv,
                 P.search_precursors,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
             P.recalibrated_sage_config = update_sage_config(
-                P, P.sage_config, P.precursor_mz_search_tolerance, P.fragment_mz_search_tolerance,
+                P.sage_config, P.precursor_mz_search_tolerance, P.fragment_mz_search_tolerance,
             )
 
             # RT and IIM are independent, sibling optional steps, each gated
@@ -2332,7 +2312,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     cfg.recalibration.rt.get("server_url"), _DEFAULT_KOINA_HTTP_SERVER_URL
                 )
                 P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
-                    P,
                     P.dumped_peptides,
                     P.filtered_sage_results_tsv,
                     rt_cache_path=_rt_cache_path,
@@ -2348,7 +2327,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.precursor_correction_rt_model,
                     P.precursor_correction_rt_fit_plot,
                 ) = correct_precursors_rt(
-                    P,
                     P.filtered_sage_results_tsv,
                     P.predicted_rt,
                     P.dumped_peptides,
@@ -2391,7 +2369,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     cfg.recalibration.iim.get("server_url"), _DEFAULT_KOINA_GRPC_SERVER_URL
                 )
                 P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
-                    P,
                     P.dumped_peptides,
                     P.filtered_sage_results_tsv,
                     iim_cache_path=_iim_cache_path,
@@ -2415,7 +2392,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.precursor_correction_iim_models,
                     P.precursor_correction_iim_fit_plot,
                 ) = correct_precursors_iim(
-                    P,
                     P.filtered_sage_results_tsv,
                     P.predicted_iim,
                     P.dumped_peptides,
@@ -2443,12 +2419,12 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.precursor_correction_rt_tolerance = (
                 precursor_correction_rt_tolerance
                 if precursor_correction_rt_tolerance is not None
-                else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+                else write_no_prediction_marker(text=_NO_PREDICTION_TEXT)
             )
             P.precursor_correction_mobility_tolerance = (
                 precursor_correction_mobility_tolerance
                 if precursor_correction_mobility_tolerance is not None
-                else write_no_prediction_marker(P, text=_NO_PREDICTION_TEXT)
+                else write_no_prediction_marker(text=_NO_PREDICTION_TEXT)
             )
 
             # Unconditional -- a safe no-op copy-through when `dimensions`
@@ -2458,7 +2434,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             # and RT/IIM-active jobs share this one call and the one final
             # `run_sage` call below.
             P.recalibrated_sage_config_rt_iim = update_sage_config_rt_iim(
-                P,
                 P.recalibrated_sage_config,
                 P.precursor_correction_rt_tolerance,
                 P.precursor_correction_mobility_tolerance,
@@ -2470,7 +2445,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
             ) = run_sage(
-                P,
                 P.recalibrated_mz_pmsms,
                 current_precursors,
                 P.fasta,
@@ -2483,7 +2457,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             )
 
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
-                P,
                 P.filtered_sage_results_tsv,
                 P.sage_results_tsv,
                 P.filtered_sage_matched_fragments,
@@ -2503,7 +2476,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
             ) = run_sage(
-                P,
                 P.search_mz_pmsms,
                 P.search_precursors,
                 P.fasta,
@@ -2528,7 +2500,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # config-driven so a job can pick mokapot's own default (linear SVM)
         # or xgboost.
         P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
-            P,
             P.sage_results_pin,
             # "" (not None) when unset -- necroflow's dependency-provenance
             # recording can't serialize a bare `None` scalar kwarg value to
@@ -2552,7 +2523,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
         # FDR Summary
         P.sage_summary = sage_summarize(
-            P, P.sage_results_tsv, P.sage_summarize_module, fdr=cfg.sage_summarize.fdr
+            P.sage_results_tsv, P.sage_summarize_module, fdr=cfg.sage_summarize.fdr
         )
 
     # Exports -- current_mz_pmsms/current_precursors are the mz/rt/iim-corrected
@@ -2563,12 +2534,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # results disagree on what a peak's mz/rt/iim actually was -- see
     # plans/better_sage_filtering.md's B.6.
     P.search_mzml, P.search_mzml_idmap = convert_search_pmsms_to_mzml(
-        P, current_mz_pmsms, current_precursors,
+        current_mz_pmsms, current_precursors,
     )
     mgf_config_path = cfg.get("mgf", {}).get("config_path")
     if mgf_config_path:
         P.search_mgf = convert_search_pmsms_to_mgf(
-            P,
             current_mz_pmsms,
             current_precursors,
             config_path=mgf_config_path,
@@ -2576,23 +2546,23 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     if "fragpipe" in cfg:
         P.fragpipe_workflow = source_fragpipe_workflow(
-            P, path=cfg.fragpipe.workflow_path
+            path=cfg.fragpipe.workflow_path
         )
-        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P, P.fasta)
+        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P.fasta)
         P.fragpipe_workflow_patched = patch_fragpipe_workflow(
-            P, P.fragpipe_workflow, P.fragpipe_decoy_fasta
+            P.fragpipe_workflow, P.fragpipe_decoy_fasta
         )
-        P.fragpipe_manifest = write_fragpipe_manifest(P, P.search_mzml)
+        P.fragpipe_manifest = write_fragpipe_manifest(P.search_mzml)
         P.fragpipe_results_dir = run_fragpipe(
-            P,
             P.fragpipe_manifest,
             P.fragpipe_workflow_patched,
             ram=cfg.fragpipe.get("ram", 0),
         )
-        P.fragpipe_log = extract_fragpipe_log(P, P.fragpipe_results_dir)
-        P.fragpipe_summary = summarize_fragpipe(P, P.fragpipe_log)
+        P.fragpipe_log = extract_fragpipe_log(P.fragpipe_results_dir)
+        P.fragpipe_summary = summarize_fragpipe(P.fragpipe_log)
 
 
+@workflow
 def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     """FragPipe smoke test on simulated data -- no Bruker .d input, no Sage.
 
@@ -2615,12 +2585,11 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     produced valid output from the same simulate_peptides_to_pmsms run.
     """
     cfg: DotDict = DotDict.Recursive(config)
-    P.pipeline_config = write_pipeline_config(P, text=tomlkit.dumps(config))
+    P.pipeline_config = write_pipeline_config(text=tomlkit.dumps(config))
 
     # Peptide Simulation
-    P.fasta = source_fasta(P, path=cfg.fasta_path)
+    P.fasta = source_fasta(path=cfg.fasta_path)
     P.synthetic_pmsms, P.synthetic_precursors = simulate_peptides_to_pmsms(
-        P,
         P.fasta,
         charges=cfg.get("simulation", {}).get("charges", "2,3"),
         max_peptides_per_protein=cfg.get("simulation", {}).get(
@@ -2633,25 +2602,24 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     output_format = cfg.get("output_format", "mzml")
     if output_format == "mzml":
         P.synthetic_mzml, P.synthetic_mzml_idmap = convert_synthetic_pmsms_to_mzml(
-            P,
             P.synthetic_pmsms,
             P.synthetic_precursors,
         )
 
         # FragPipe Search
         P.fragpipe_workflow = source_fragpipe_workflow(
-            P, path=cfg.fragpipe.workflow_path
+            path=cfg.fragpipe.workflow_path
         )
-        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P, P.fasta)
+        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P.fasta)
         P.fragpipe_workflow_patched = patch_fragpipe_workflow(
-            P, P.fragpipe_workflow, P.fragpipe_decoy_fasta
+            P.fragpipe_workflow, P.fragpipe_decoy_fasta
         )
-        P.fragpipe_manifest = write_fragpipe_manifest(P, P.synthetic_mzml)
+        P.fragpipe_manifest = write_fragpipe_manifest(P.synthetic_mzml)
         P.fragpipe_results_dir = run_fragpipe(
-            P, P.fragpipe_manifest, P.fragpipe_workflow_patched
+            P.fragpipe_manifest, P.fragpipe_workflow_patched
         )
-        P.fragpipe_log = extract_fragpipe_log(P, P.fragpipe_results_dir)
-        P.fragpipe_summary = summarize_fragpipe(P, P.fragpipe_log)
+        P.fragpipe_log = extract_fragpipe_log(P.fragpipe_results_dir)
+        P.fragpipe_summary = summarize_fragpipe(P.fragpipe_log)
     elif output_format == "mgf":
         mgf_config_path = cfg.get("mgf", {}).get("config_path")
         if not mgf_config_path:
@@ -2659,7 +2627,6 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
                 "cfg.mgf.config_path is required when cfg.output_format == 'mgf'"
             )
         P.synthetic_mgf = convert_synthetic_pmsms_to_mgf(
-            P,
             P.synthetic_pmsms,
             P.synthetic_precursors,
             config_path=mgf_config_path,

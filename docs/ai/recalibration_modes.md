@@ -38,14 +38,14 @@ their own `[recalibration.rt]`/`[recalibration.iim]` tables (the entries
 just below), `dimensions` was carrying the exact same fact a second time —
 and the name `[recalibration.rt_iim]` read as "both RT and IIM" while
 actually meaning "the RT/IIM subsystem in general," which was a real
-footgun reading a config cold. `dimensions` is now computed in the pipeline
-factory (`tuple(d for d in ("rt", "iim") if d in cfg.recalibration)`), not
+footgun reading a config cold. `dimensions` is now computed in the
+workflow (`tuple(d for d in ("rt", "iim") if d in cfg.recalibration)`), not
 read from config; `[recalibration.rt_iim]` no longer exists as a concept.
 `NoPrediction`/the Python-callback-command pattern is unaffected by this —
 that part remains necessary because necroflow's `@command` templates are
 static and RT/IIM are independently optional (4 real combinations), even
 though necroflow *does* support skipping a rule/node entirely via plain
-`if/else` branching in the factory (its `docs/rules.md`'s "Conditional
+`if/else` branching in the workflow (its `docs/rules.md`'s "Conditional
 pipelines") — properly removing the sentinel would mean splitting
 `update_sage_config_rt_iim` into up to 3 static-template rule variants
 instead; not done, deliberately deferred as a larger, separate change.
@@ -58,7 +58,7 @@ searched against. Before B.6, this variable didn't exist at all
 pre-existing gap this closes for mz too, not just RT/IIM. Named
 `current_*`, not `final_*` (2026-09-07 rename): each is reassigned as
 later recalibration/RT/IIM stages run, so it's only "final" once the
-factory function returns, not at its point of definition.
+workflow function returns, not at its point of definition.
 
 MGF export is optional: `convert_search_pmsms_to_mgf` is wired only when
 `[mgf].config_path` is present. The path is a scalar rule input rather than a typed

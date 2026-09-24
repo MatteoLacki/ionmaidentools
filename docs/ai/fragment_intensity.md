@@ -105,7 +105,7 @@ convention as `[recalibration.rt]`/`[recalibration.iim]` (see
 Node/`None`) inputs, so necroflow's `Rule._validate_input_presence` requires
 them passed *positionally* like `predicted_rt`/`predicted_iim` — passing them
 as `keyword=` args (as a first attempt at the mode-1/mode-2 call sites did)
-raises `TypeError: run_sage: unexpected inputs: [...]` at pipeline-factory
+raises `TypeError: run_sage: unexpected inputs: [...]` at workflow-build
 time, since necroflow classifies each rule input as strictly one or the other
 class based on its type annotation (`_node_input_contract` returning
 non-`None`), never both. When `predicted_rt`/`predicted_iim` also need to be

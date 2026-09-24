@@ -2,11 +2,11 @@
 
 ## What this repo is
 
-`src/ionmaidentools/pipelines.py` is the necroflow pipeline factory for the ionmaiden
+`src/ionmaidentools/pipelines.py` holds the necroflow workflows for the ionmaiden
 DIA timsTOF pipeline — the single module every job TOML's `.pipeline` key points at
 (e.g. `git/ionmaidentools/src/ionmaidentools/pipelines.py:ionmaiden_pipeline`). It has
 no other source files: one large module, `NodeType` subclasses + `@command`-decorated
-rule functions + two top-level pipeline factory functions.
+rule functions + two top-level `@workflow` functions.
 
 Package metadata (`pyproject.toml`): depends on `tomlkit` + `dictodot`, no CLI entry
 points registered — this package is imported by necroflow's job runner (`./nf`, i.e.
@@ -21,21 +21,24 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 - `output(SomeNodeType)` inside the function body declares a typed output node; its
   placeholder is substituted into the shell template. The function returns the output
   node(s).
-- Pipeline factories (`ionmaiden_pipeline(P, config)`, `fragpipe_synthetic_pipeline(P, config)`)
-  wire rules together: `P.some_label = some_rule(P, parent_node, ..., scalar_kwarg=...)`.
-  The first positional arg is always the `Pipeline` object `P`.
-- Both factories serialize their complete Necroflow-supplied config through
+- Workflows (`ionmaiden_pipeline(P, config)`, `fragpipe_synthetic_pipeline(P, config)`)
+  are decorated `@workflow`, so `P` is the active Pipeline while one runs and rules are
+  called without it: `P.some_label = some_rule(parent_node, ..., scalar_kwarg=...)`.
+  Helpers defined inside a workflow (e.g. `_finalize_confident_psms`) use the same
+  active Pipeline. Necroflow still accepts an explicit leading `P`; this module no
+  longer passes it.
+- Both workflows serialize their complete Necroflow-supplied config through
   `write_pipeline_config` and publish it as requestable `P.pipeline_config`
   (`pipeline_config.toml`). Necroflow strips metadata keys such as `.pipeline` and
-  `.requests`, resolves `.extends`, and expands grids before calling the factory, so
-  the file records the effective factory input.
+  `.requests`, resolves `.extends`, and expands grids before calling the workflow, so
+  the file records the effective workflow input.
 - Every rule shells out to a real installed/patched CLI directly — no bespoke Python
   wrapper CLIs. External tools live at fixed, pre-installed paths (`git/sage/target/release`,
   `software/fragpipe/fragpipe-24.0`), same convention on both sides.
 - See root `CLAUDE.md`'s "Precursor table format" — all precursor tables in this pipeline
   are `.mmappet` directories (`MmappetDataset` subclasses here), never intermediate parquet.
 
-## Two pipeline factories
+## Two workflows
 
 - `ionmaiden_pipeline`: the real pipeline — Bruker `.d` → MS1 peak picking → quadrupole
   transmission → pseudo-MS/MS → SAGE search (+ optional recalibration pass, optional
