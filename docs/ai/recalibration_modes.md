@@ -220,9 +220,10 @@ most probable (frame, scan) raw MS2 spectrum is searched in place:
   `fragment_event_cnt` pointing at the first footprint row's (frame, scan) slice of
   `events.ms2/data.mmappet` (`timstofu.cli.top_cell_precursors`; footprint rows are
   sorted by probability, most probable first).
-- `run_sage_on_raw_ms2(ms2_events, top_cell_precursors, tof2mz_table, ...)`: Sage
-  with `--pmsms <events.ms2>/data.mmappet --tof2mz <table>`, same four outputs as
-  `run_sage`. Needs a Sage built with `--tof2mz` (git/sage `757eee0`).
+- `run_sage(ms2_events, top_cell_precursors, ..., tof2mz=tof2mz_table)`: `run_sage`
+  takes either a pmsms or the raw `Ms2Events` store; with `tof2mz` it runs Sage with
+  `--pmsms <events.ms2>/data.mmappet --tof2mz <table>`. Needs a Sage built with
+  `--tof2mz` (git/sage `757eee0`).
 
 The fits (`recalibrate_pmsms_mz`, `recalibrate_precursors`, RT) are unchanged and
 still apply to the main pmsms and `search_precursors`: they read only the

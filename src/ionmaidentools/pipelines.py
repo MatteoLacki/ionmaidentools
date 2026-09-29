@@ -1318,7 +1318,11 @@ def _run_sage_command(args: CommandArgs) -> str:
     """
     sage_binary = shlex.quote(str(args.inputs.sage_binary))
     fasta = shlex.quote(str(args.inputs.fasta))
-    pmsms = shlex.quote(str(args.inputs.pmsms))
+    reads_raw_ms2 = args.inputs.tof2mz is not None
+    if reads_raw_ms2:
+        pmsms = shlex.quote(str(Path(args.inputs.pmsms) / "data.mmappet"))
+    else:
+        pmsms = shlex.quote(str(args.inputs.pmsms))
     precursors = shlex.quote(str(args.inputs.precursors))
     sage_config = shlex.quote(str(args.inputs.sage_config))
     workdir = shlex.quote(str(args.workdir))
@@ -1328,6 +1332,8 @@ def _run_sage_command(args: CommandArgs) -> str:
     matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
 
     flags = ""
+    if reads_raw_ms2:
+        flags += f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
     if args.inputs.predicted_rt is not None:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
     if args.inputs.predicted_iim is not None:
@@ -1358,7 +1364,7 @@ def _run_sage_command(args: CommandArgs) -> str:
 
 @command(_run_sage_command, threads=CORES)
 def run_sage(
-    pmsms: Pmsms,
+    pmsms: Pmsms | Ms2Events,
     precursors: PreSageFilteredPrecursors,
     fasta: Fasta,
     sage_config: SageConfig,
@@ -1367,6 +1373,7 @@ def run_sage(
     predicted_iim: PredictedIim | None = None,
     predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
     fragment_intensity_cache_path: str = "",
+    tof2mz: Tof2MzTable | None = None,
 ):
     """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
     Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
@@ -1388,47 +1395,13 @@ def run_sage(
     feature-only (`ms2_*` scoring columns), no hard eviction, independent
     of predicted_rt/predicted_iim. See
     `git/sage/docs/ai/predicted_fragment_intensity.md`.
+
+    `pmsms` is either a pmsms with an `mz` column, or the raw `Ms2Events` store
+    together with `tof2mz` (a mixed Node/`None` input): then Sage reads
+    `<events.ms2>/data.mmappet` in place with `--tof2mz`, `precursors` addressing
+    its spectra (e.g. `top_cell_precursors`). Pass `tof2mz` exactly when `pmsms`
+    is the raw store: without it Sage finds no `mz` column and searches nothing.
     """
-    results_json = output(SageResultsJson)
-    results_pin = output(SageResultsPin)
-    results_tsv = output(SageResultsTsv)
-    matched_fragments = output(SageMatchedFragments)
-    return results_json, results_pin, results_tsv, matched_fragments
-
-
-def _run_sage_on_raw_ms2_command(args: CommandArgs) -> str:
-    sage_binary = shlex.quote(str(args.inputs.sage_binary))
-    fasta = shlex.quote(str(args.inputs.fasta))
-    ms2_events = shlex.quote(str(Path(args.inputs.ms2) / "data.mmappet"))
-    precursors = shlex.quote(str(args.inputs.precursors))
-    tof2mz = shlex.quote(str(args.inputs.tof2mz))
-    sage_config = shlex.quote(str(args.inputs.sage_config))
-    workdir = shlex.quote(str(args.workdir))
-    results_json = shlex.quote(str(args.outputs.results_json))
-    results_pin = shlex.quote(str(args.outputs.results_pin))
-    results_tsv = shlex.quote(str(args.outputs.results_tsv))
-    matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
-    return (
-        f"{sage_binary} --version && {sage_binary} -f {fasta}"
-        f" --annotate-matches --write-pin --output_directory {workdir}"
-        f" --pmsms {ms2_events} --precursors {precursors} --tof2mz {tof2mz} {sage_config}"
-        f" && test -f {results_json} && test -f {results_pin}"
-        f" && test -f {results_tsv} && test -f {matched_fragments}"
-    )
-
-
-@command(_run_sage_on_raw_ms2_command, threads=CORES)
-def run_sage_on_raw_ms2(
-    ms2: Ms2Events,
-    precursors: TopCellPrecursors,
-    tof2mz: Tof2MzTable,
-    fasta: Fasta,
-    sage_config: SageConfig,
-    sage_binary: SageBinary,
-):
-    """Run Sage on raw MS2 spectra in place: `precursors` address slices of the
-    `Ms2Events` store and fragment m/z is `tof2mz[tof]` (Sage's `--tof2mz`), so no
-    pmsms or m/z column is built. Same outputs as `run_sage`."""
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
     results_tsv = output(SageResultsTsv)
@@ -2317,32 +2290,26 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.recalibration_top_cell_precursors = top_cell_precursors(
                     P.recalibration_precursors, P.transmitted_ms1events, P.ms2_events
                 )
-                (
-                    P.filtered_sage_results_json,
-                    P.filtered_sage_results_pin,
-                    P.filtered_sage_results_tsv,
-                    P.filtered_sage_matched_fragments,
-                ) = run_sage_on_raw_ms2(
-                    P.ms2_events,
-                    P.recalibration_top_cell_precursors,
-                    P.tof2mz_table,
-                    P.fasta,
-                    P.sage_config,
-                    P.sage_binary,
-                )
+                recalibration_spectra = P.ms2_events
+                recalibration_search_precursors = P.recalibration_top_cell_precursors
+                recalibration_tof2mz = P.tof2mz_table
             else:
-                (
-                    P.filtered_sage_results_json,
-                    P.filtered_sage_results_pin,
-                    P.filtered_sage_results_tsv,
-                    P.filtered_sage_matched_fragments,
-                ) = run_sage(
-                    P.search_mz_pmsms,
-                    P.recalibration_precursors,
-                    P.fasta,
-                    P.sage_config,
-                    P.sage_binary,
-                )
+                recalibration_spectra = P.search_mz_pmsms
+                recalibration_search_precursors = P.recalibration_precursors
+                recalibration_tof2mz = None
+            (
+                P.filtered_sage_results_json,
+                P.filtered_sage_results_pin,
+                P.filtered_sage_results_tsv,
+                P.filtered_sage_matched_fragments,
+            ) = run_sage(
+                recalibration_spectra,
+                recalibration_search_precursors,
+                P.fasta,
+                P.sage_config,
+                P.sage_binary,
+                tof2mz=recalibration_tof2mz,
+            )
             P.recalibration_config = write_recalibration_config(
                 text=tomlkit.dumps(cfg.recalibration)
             )
