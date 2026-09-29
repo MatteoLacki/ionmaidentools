@@ -894,6 +894,26 @@ def filter_pre_sage_precursors(precursors: Ms2IndexedPrecursors, filter: str):
     return filtered
 
 
+# Drops the main run's pmsms index columns, which `cut_and_index_precursors` adds again
+# for the recalibration pmsms (COLUMNS(...) instead of EXCLUDE so an absent one is
+# fine), and restores mkpmsms' int64 precursor_idx (the indexed table carries uint64).
+RECALIBRATION_PRECURSORS_WITHOUT_PMSMS_INDEX = (
+    "SELECT CAST(precursor_idx AS BIGINT) AS precursor_idx, "
+    "COLUMNS(c -> c NOT IN ('precursor_idx', 'fragment_event_cnt', 'fragment_spectrum_start', "
+    "'max_group_len', 'avg_group_len')) FROM dataset"
+)
+
+
+@command(
+    "venvs/common/bin/filter_mmappet {precursors} {stripped} --verbose --filter {filter}"
+,
+    threads=CORES)
+def strip_recalibration_precursors(precursors: RecalibrationPrecursors, filter: str):
+    """The recalibration sample as mkpmsms input for its own pmsms."""
+    stripped = output(FirstFilterPrecursors)
+    return stripped
+
+
 @text_file
 def write_precursor_neighbors_config(text: str):
     config = output(PrecursorNeighborsConfig)
@@ -2237,14 +2257,43 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.search_precursors,
                 P.recalibration_precursor_selection_config,
             )
+            recalibration_mz_pmsms = P.search_mz_pmsms
+            recalibration_search_precursors = P.recalibration_precursors
+            if "recalibration_pseudomsms" in cfg:
+                # The recalibration search gets its own pmsms, built by mkpmsms with
+                # `[recalibration_pseudomsms]` over the same sample; the fits below
+                # still apply to the main pmsms and precursors.
+                P.recalibration_mkpmsms_precursors = strip_recalibration_precursors(
+                    P.recalibration_precursors,
+                    filter=RECALIBRATION_PRECURSORS_WITHOUT_PMSMS_INDEX,
+                )
+                P.recalibration_pseudomsms_config = write_pseudomsms_config(
+                    text=tomlkit.dumps(cfg.recalibration_pseudomsms)
+                )
+                P.recalibration_pmsms = run_mkpmsms_binary(
+                    P.mkpmsms_binary,
+                    P.ms2_events,
+                    P.transmitted_ms1events,
+                    P.recalibration_mkpmsms_precursors,
+                    P.recalibration_pseudomsms_config,
+                )
+                P.recalibration_ms2indexed_precursors = cut_and_index_precursors(
+                    P.recalibration_mkpmsms_precursors, P.recalibration_pmsms
+                )
+                P.recalibration_search_precursors = filter_pre_sage_precursors(
+                    P.recalibration_ms2indexed_precursors, filter=""
+                )
+                P.recalibration_mz_pmsms = materialize_pmsms_mz(P.recalibration_pmsms, P.tdf)
+                recalibration_mz_pmsms = P.recalibration_mz_pmsms
+                recalibration_search_precursors = P.recalibration_search_precursors
             (
                 P.filtered_sage_results_json,
                 P.filtered_sage_results_pin,
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
             ) = run_sage(
-                P.search_mz_pmsms,
-                P.recalibration_precursors,
+                recalibration_mz_pmsms,
+                recalibration_search_precursors,
                 P.fasta,
                 P.sage_config,
                 P.sage_binary,

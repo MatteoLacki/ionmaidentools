@@ -206,3 +206,22 @@ The repeated `confident_psms → sage_pmsms_mapping → score_comparison`
 trio (previously written out once per branch) is now one
 `_finalize_confident_psms` closure inside `ionmaiden_pipeline`, called from
 both the no-recalibration and recalibration code paths.
+
+## Recalibration spectra: `[recalibration_pseudomsms]` (2026-09-28)
+
+Optional table, gated by presence like the other recalibration tables. When set, the
+recalibration SAGE pass does not search the main pmsms; mkpmsms is run a second time,
+with this table as its config, over the same `recalibration_precursors` sample:
+`strip_recalibration_precursors` (drops the main run's pmsms index columns and casts
+`precursor_idx` back to int64, which mkpmsms requires) -> `run_mkpmsms_binary` ->
+`cut_and_index_precursors` -> `filter_pre_sage_precursors` (no filter) ->
+`materialize_pmsms_mz` -> `run_sage`. The fits (`recalibrate_pmsms_mz`,
+`recalibrate_precursors`, RT) are unchanged and still apply to the main pmsms and
+`search_precursors`: they read only the recalibration search's PSMs and matched
+fragments. Without the table the recalibration `run_sage` gets the same nodes as
+before, so existing jobs keep their hashes.
+
+`jobs/f9477_recal_topprob.toml` sets `tofs_extraction_method =
+"top_probable_frame_scan"` (one raw MS2 spectrum per precursor, its most probable
+footprint cell). Comparison with `f9477_best`:
+`git/pipeline_analysis/docs/ai/recalibration_paths.md`.
