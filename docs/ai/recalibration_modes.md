@@ -207,21 +207,32 @@ trio (previously written out once per branch) is now one
 `_finalize_confident_psms` closure inside `ionmaiden_pipeline`, called from
 both the no-recalibration and recalibration code paths.
 
-## Recalibration spectra: `[recalibration_pseudomsms]` (2026-09-28)
+## Recalibration spectra from raw MS2 top cells: `[recalibration_top_cell]` (2026-09-29)
 
-Optional table, gated by presence like the other recalibration tables. When set, the
-recalibration SAGE pass does not search the main pmsms; mkpmsms is run a second time,
-with this table as its config, over the same `recalibration_precursors` sample:
-`strip_recalibration_precursors` (drops the main run's pmsms index columns and casts
-`precursor_idx` back to int64, which mkpmsms requires) -> `run_mkpmsms_binary` ->
-`cut_and_index_precursors` -> `filter_pre_sage_precursors` (no filter) ->
-`materialize_pmsms_mz` -> `run_sage`. The fits (`recalibrate_pmsms_mz`,
-`recalibrate_precursors`, RT) are unchanged and still apply to the main pmsms and
-`search_precursors`: they read only the recalibration search's PSMs and matched
-fragments. Without the table the recalibration `run_sage` gets the same nodes as
-before, so existing jobs keep their hashes.
+Optional table, gated by presence like `[fragment_intensity]`. When set, the
+recalibration SAGE pass does not search the main pmsms. Each sampled precursor's
+most probable (frame, scan) raw MS2 spectrum is searched in place:
 
-`jobs/f9477_recal_topprob.toml` sets `tofs_extraction_method =
-"top_probable_frame_scan"` (one raw MS2 spectrum per precursor, its most probable
-footprint cell). Comparison with `f9477_best`:
+- `write_tof2mz_table(tdf)` -> `Tof2MzTable`: the dense tof -> m/z table
+  `materialize_pmsms_mz` applies (float32 column `mz`; `timstofu.cli.write_tof2mz_table`).
+- `top_cell_precursors(recalibration_precursors, transmitted_ms1events, ms2_events)`
+  -> `TopCellPrecursors`: the same sample, with `fragment_spectrum_start` /
+  `fragment_event_cnt` pointing at the first footprint row's (frame, scan) slice of
+  `events.ms2/data.mmappet` (`timstofu.cli.top_cell_precursors`; footprint rows are
+  sorted by probability, most probable first).
+- `run_sage_on_raw_ms2(ms2_events, top_cell_precursors, tof2mz_table, ...)`: Sage
+  with `--pmsms <events.ms2>/data.mmappet --tof2mz <table>`, same four outputs as
+  `run_sage`. Needs a Sage built with `--tof2mz` (git/sage `757eee0`).
+
+The fits (`recalibrate_pmsms_mz`, `recalibrate_precursors`, RT) are unchanged and
+still apply to the main pmsms and `search_precursors`: they read only the
+recalibration search's PSMs and matched fragments. Without the table the recalibration
+`run_sage` gets the same nodes as before.
+
+These are exactly the spectra mkpmsms' `top_probable_frame_scan` copies into a pmsms.
+The mkpmsms route (`[recalibration_pseudomsms]`, commit 81ec5cb, replaced by this)
+built them with a second mkpmsms run, cut-and-index and a materialized m/z column;
+SAGE on the raw top cells reproduced that search exactly on F9477 (all 47,917 PSMs and
+235,629 matched fragments identical), and the pipeline's two tables equal the ones
+used there. Comparison with `f9477_best`:
 `git/pipeline_analysis/docs/ai/recalibration_paths.md`.

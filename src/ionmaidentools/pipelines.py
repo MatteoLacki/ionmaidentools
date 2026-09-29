@@ -425,6 +425,19 @@ class RecalibrationPrecursors(TofFilteredPrecursors):
     filename = "recalibration_precursors.mmappet"
 
 
+class TopCellPrecursors(RecalibrationPrecursors):
+    """Recalibration precursors whose spectrum pointers address the raw `Ms2Events`
+    store: each precursor's most probable (frame, scan)."""
+
+    filename = "top_cell_precursors.mmappet"
+
+
+class Tof2MzTable(MmappetDataset):
+    """Dense tof -> m/z table (float32 column `mz`), the one `materialize_pmsms_mz` applies."""
+
+    filename = "tof2mz.mmappet"
+
+
 class RecalibrationConfig(NodeType):
     filename = "recalibration_config.toml"
 
@@ -894,24 +907,23 @@ def filter_pre_sage_precursors(precursors: Ms2IndexedPrecursors, filter: str):
     return filtered
 
 
-# Drops the main run's pmsms index columns, which `cut_and_index_precursors` adds again
-# for the recalibration pmsms (COLUMNS(...) instead of EXCLUDE so an absent one is
-# fine), and restores mkpmsms' int64 precursor_idx (the indexed table carries uint64).
-RECALIBRATION_PRECURSORS_WITHOUT_PMSMS_INDEX = (
-    "SELECT CAST(precursor_idx AS BIGINT) AS precursor_idx, "
-    "COLUMNS(c -> c NOT IN ('precursor_idx', 'fragment_event_cnt', 'fragment_spectrum_start', "
-    "'max_group_len', 'avg_group_len')) FROM dataset"
-)
+@command("venvs/common/bin/python -m timstofu.cli.write_tof2mz_table {tdf} {table}")
+def write_tof2mz_table(tdf: BrukerD):
+    table = output(Tof2MzTable)
+    return table
 
 
 @command(
-    "venvs/common/bin/filter_mmappet {precursors} {stripped} --verbose --filter {filter}"
-,
-    threads=CORES)
-def strip_recalibration_precursors(precursors: RecalibrationPrecursors, filter: str):
-    """The recalibration sample as mkpmsms input for its own pmsms."""
-    stripped = output(FirstFilterPrecursors)
-    return stripped
+    "venvs/common/bin/python -m timstofu.cli.top_cell_precursors"
+    " {precursors} {transmitted} {ms2} {top_cell}"
+)
+def top_cell_precursors(
+    precursors: RecalibrationPrecursors,
+    transmitted: TransmittedMs1Events,
+    ms2: Ms2Events,
+):
+    top_cell = output(TopCellPrecursors)
+    return top_cell
 
 
 @text_file
@@ -1377,6 +1389,46 @@ def run_sage(
     of predicted_rt/predicted_iim. See
     `git/sage/docs/ai/predicted_fragment_intensity.md`.
     """
+    results_json = output(SageResultsJson)
+    results_pin = output(SageResultsPin)
+    results_tsv = output(SageResultsTsv)
+    matched_fragments = output(SageMatchedFragments)
+    return results_json, results_pin, results_tsv, matched_fragments
+
+
+def _run_sage_on_raw_ms2_command(args: CommandArgs) -> str:
+    sage_binary = shlex.quote(str(args.inputs.sage_binary))
+    fasta = shlex.quote(str(args.inputs.fasta))
+    ms2_events = shlex.quote(str(Path(args.inputs.ms2) / "data.mmappet"))
+    precursors = shlex.quote(str(args.inputs.precursors))
+    tof2mz = shlex.quote(str(args.inputs.tof2mz))
+    sage_config = shlex.quote(str(args.inputs.sage_config))
+    workdir = shlex.quote(str(args.workdir))
+    results_json = shlex.quote(str(args.outputs.results_json))
+    results_pin = shlex.quote(str(args.outputs.results_pin))
+    results_tsv = shlex.quote(str(args.outputs.results_tsv))
+    matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
+    return (
+        f"{sage_binary} --version && {sage_binary} -f {fasta}"
+        f" --annotate-matches --write-pin --output_directory {workdir}"
+        f" --pmsms {ms2_events} --precursors {precursors} --tof2mz {tof2mz} {sage_config}"
+        f" && test -f {results_json} && test -f {results_pin}"
+        f" && test -f {results_tsv} && test -f {matched_fragments}"
+    )
+
+
+@command(_run_sage_on_raw_ms2_command, threads=CORES)
+def run_sage_on_raw_ms2(
+    ms2: Ms2Events,
+    precursors: TopCellPrecursors,
+    tof2mz: Tof2MzTable,
+    fasta: Fasta,
+    sage_config: SageConfig,
+    sage_binary: SageBinary,
+):
+    """Run Sage on raw MS2 spectra in place: `precursors` address slices of the
+    `Ms2Events` store and fragment m/z is `tof2mz[tof]` (Sage's `--tof2mz`), so no
+    pmsms or m/z column is built. Same outputs as `run_sage`."""
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
     results_tsv = output(SageResultsTsv)
@@ -2257,47 +2309,40 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.search_precursors,
                 P.recalibration_precursor_selection_config,
             )
-            recalibration_mz_pmsms = P.search_mz_pmsms
-            recalibration_search_precursors = P.recalibration_precursors
-            if "recalibration_pseudomsms" in cfg:
-                # The recalibration search gets its own pmsms, built by mkpmsms with
-                # `[recalibration_pseudomsms]` over the same sample; the fits below
-                # still apply to the main pmsms and precursors.
-                P.recalibration_mkpmsms_precursors = strip_recalibration_precursors(
-                    P.recalibration_precursors,
-                    filter=RECALIBRATION_PRECURSORS_WITHOUT_PMSMS_INDEX,
+            if "recalibration_top_cell" in cfg:
+                # The recalibration search reads each sampled precursor's most
+                # probable raw MS2 spectrum in place; the fits below still apply to
+                # the main pmsms and precursors.
+                P.tof2mz_table = write_tof2mz_table(P.tdf)
+                P.recalibration_top_cell_precursors = top_cell_precursors(
+                    P.recalibration_precursors, P.transmitted_ms1events, P.ms2_events
                 )
-                P.recalibration_pseudomsms_config = write_pseudomsms_config(
-                    text=tomlkit.dumps(cfg.recalibration_pseudomsms)
-                )
-                P.recalibration_pmsms = run_mkpmsms_binary(
-                    P.mkpmsms_binary,
+                (
+                    P.filtered_sage_results_json,
+                    P.filtered_sage_results_pin,
+                    P.filtered_sage_results_tsv,
+                    P.filtered_sage_matched_fragments,
+                ) = run_sage_on_raw_ms2(
                     P.ms2_events,
-                    P.transmitted_ms1events,
-                    P.recalibration_mkpmsms_precursors,
-                    P.recalibration_pseudomsms_config,
+                    P.recalibration_top_cell_precursors,
+                    P.tof2mz_table,
+                    P.fasta,
+                    P.sage_config,
+                    P.sage_binary,
                 )
-                P.recalibration_ms2indexed_precursors = cut_and_index_precursors(
-                    P.recalibration_mkpmsms_precursors, P.recalibration_pmsms
+            else:
+                (
+                    P.filtered_sage_results_json,
+                    P.filtered_sage_results_pin,
+                    P.filtered_sage_results_tsv,
+                    P.filtered_sage_matched_fragments,
+                ) = run_sage(
+                    P.search_mz_pmsms,
+                    P.recalibration_precursors,
+                    P.fasta,
+                    P.sage_config,
+                    P.sage_binary,
                 )
-                P.recalibration_search_precursors = filter_pre_sage_precursors(
-                    P.recalibration_ms2indexed_precursors, filter=""
-                )
-                P.recalibration_mz_pmsms = materialize_pmsms_mz(P.recalibration_pmsms, P.tdf)
-                recalibration_mz_pmsms = P.recalibration_mz_pmsms
-                recalibration_search_precursors = P.recalibration_search_precursors
-            (
-                P.filtered_sage_results_json,
-                P.filtered_sage_results_pin,
-                P.filtered_sage_results_tsv,
-                P.filtered_sage_matched_fragments,
-            ) = run_sage(
-                recalibration_mz_pmsms,
-                recalibration_search_precursors,
-                P.fasta,
-                P.sage_config,
-                P.sage_binary,
-            )
             P.recalibration_config = write_recalibration_config(
                 text=tomlkit.dumps(cfg.recalibration)
             )
