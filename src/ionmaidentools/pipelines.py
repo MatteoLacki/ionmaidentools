@@ -190,24 +190,35 @@ class TofFilteredPrecursors(PreSageFilteredPrecursors):
 
 class MzPmsms(Pmsms):
     """A pmsms dataset with a materialized `mz` column (uncorrected), produced by
-    timstofu's materialize_pmsms_mz. Accepted wherever Pmsms is."""
+    timstofu's materialize_pmsms_mz. Accepted wherever Pmsms is. Only exports and
+    sage_map_to_pmsms read it; SAGE reads `tof` through a Tof2MzTable."""
 
     filename = "mz_pmsms.mmappet"
 
 
 class MzRecalibration(NodeType):
-    """Grid-sampled fragment m/z ppm-correction artifact (dimension "mz"),
-    produced by recalibrate_pmsms_mz alongside the pmsms it already applied the
-    correction to -- kept for inspection/reuse, not re-consumed downstream."""
+    """Grid-sampled fragment m/z ppm-correction artifact with the single dimension
+    "mz" (`f_mz`, bias 0), produced by recalibrate_pmsms_mz. Read by SAGE's
+    `--mz-recalibration` and materialize_recalibrated_pmsms_mz, both together with
+    FragmentShiftedPrecursors' `fragment_shift_ppm`."""
 
     filename = "mz_recalibration.mzcalib"
 
 
 class RecalibratedPmsms(MzPmsms):
-    """MzPmsms with its `mz` column corrected in place by recalibrate_pmsms_mz.
+    """MzPmsms whose `mz` is recalibrated (`f_mz` plus each precursor's
+    `fragment_shift_ppm`), produced by materialize_recalibrated_pmsms_mz for exports.
     Accepted wherever MzPmsms (or, transitively, Pmsms) is."""
 
     filename = "recalibrated_pmsms.mmappet"
+
+
+class FragmentShiftedPrecursors(PreSageFilteredPrecursors):
+    """Precursors plus `fragment_shift_ppm` (`bias + f_rt(rt)`, from
+    recalibrate_pmsms_mz): the per-precursor ppm term SAGE's `--mz-recalibration`
+    adds to `f_mz`. Accepted wherever PreSageFilteredPrecursors is."""
+
+    filename = "fragment_shifted_precursors.mmappet"
 
 
 class SageConfig(NodeType):
@@ -433,7 +444,8 @@ class TopCellPrecursors(RecalibrationPrecursors):
 
 
 class Tof2MzTable(MmappetDataset):
-    """Dense tof -> m/z table (float32 column `mz`), the one `materialize_pmsms_mz` applies."""
+    """Dense tof -> m/z table (float32 column `mz`): SAGE's `--tof2mz`, and the
+    values `materialize_pmsms_mz` writes."""
 
     filename = "tof2mz.mmappet"
 
@@ -1028,23 +1040,40 @@ def materialize_pmsms_mz(input_pmsms: Pmsms, tdf: BrukerD):
 
 @command(
     "NUMBA_NUM_THREADS={threads}"
-    " venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments} {mz_pmsms}"
-    " {precursors} {output_pmsms} {mz_recalibration} {tolerance} {plot} --config {config} --fdr {fdr}",
+    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tdf} {output_pmsms}"
+    " --mz-recalibration {mz_recalibration} --precursors {precursors}",
     threads=CORES,
+)
+def materialize_recalibrated_pmsms_mz(
+    input_pmsms: Pmsms,
+    tdf: BrukerD,
+    mz_recalibration: MzRecalibration,
+    precursors: FragmentShiftedPrecursors,
+):
+    """The m/z SAGE searched with `--mz-recalibration`, materialized for exports."""
+    output_pmsms = output(RecalibratedPmsms)
+    return output_pmsms
+
+
+@command(
+    "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments} {pmsms}"
+    " {tof2mz} {precursors} {output_precursors} {mz_recalibration} {tolerance} {plot}"
+    " --config {config} --fdr {fdr}",
 )
 def recalibrate_pmsms_mz(
     sage_results_tsv: SageResultsTsv,
     matched_fragments: SageMatchedFragments,
-    mz_pmsms: MzPmsms,
+    pmsms: Pmsms,
+    tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    output_pmsms = output(RecalibratedPmsms)
+    output_precursors = output(FragmentShiftedPrecursors)
     mz_recalibration = output(MzRecalibration)
     tolerance = output(FragmentTolerance)
     plot = output(Png)
-    return output_pmsms, mz_recalibration, tolerance, plot
+    return output_precursors, mz_recalibration, tolerance, plot
 
 
 @command(
@@ -1318,7 +1347,7 @@ def _run_sage_command(args: CommandArgs) -> str:
     """
     sage_binary = shlex.quote(str(args.inputs.sage_binary))
     fasta = shlex.quote(str(args.inputs.fasta))
-    reads_raw_ms2 = args.inputs.tof2mz is not None
+    reads_raw_ms2 = Path(args.inputs.pmsms).name == Ms2Events.filename
     if reads_raw_ms2:
         pmsms = shlex.quote(str(Path(args.inputs.pmsms) / "data.mmappet"))
     else:
@@ -1331,9 +1360,9 @@ def _run_sage_command(args: CommandArgs) -> str:
     results_tsv = shlex.quote(str(args.outputs.results_tsv))
     matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
 
-    flags = ""
-    if reads_raw_ms2:
-        flags += f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
+    flags = f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
+    if args.inputs.mz_recalibration is not None:
+        flags += f" --mz-recalibration {shlex.quote(str(args.inputs.mz_recalibration))}"
     if args.inputs.predicted_rt is not None:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
     if args.inputs.predicted_iim is not None:
@@ -1369,11 +1398,12 @@ def run_sage(
     fasta: Fasta,
     sage_config: SageConfig,
     sage_binary: SageBinary,
+    tof2mz: Tof2MzTable,
+    mz_recalibration: MzRecalibration | None = None,
     predicted_rt: PredictedRt | None = None,
     predicted_iim: PredictedIim | None = None,
     predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
     fragment_intensity_cache_path: str = "",
-    tof2mz: Tof2MzTable | None = None,
 ):
     """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
     Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
@@ -1396,11 +1426,13 @@ def run_sage(
     of predicted_rt/predicted_iim. See
     `git/sage/docs/ai/predicted_fragment_intensity.md`.
 
-    `pmsms` is either a pmsms with an `mz` column, or the raw `Ms2Events` store
-    together with `tof2mz` (a mixed Node/`None` input): then Sage reads
-    `<events.ms2>/data.mmappet` in place with `--tof2mz`, `precursors` addressing
-    its spectra (e.g. `top_cell_precursors`). Pass `tof2mz` exactly when `pmsms`
-    is the raw store: without it Sage finds no `mz` column and searches nothing.
+    Sage reads fragment m/z as `tof2mz[tof]` from `pmsms`' `tof` column. `pmsms`
+    is either a pmsms, or the raw `Ms2Events` store, read in place as
+    `<events.ms2>/data.mmappet` with `precursors` addressing its spectra (e.g.
+    `top_cell_precursors`). `mz_recalibration` (a mixed Node/`None` input) turns
+    on Sage's `--mz-recalibration`; `precursors` must then carry
+    `fragment_shift_ppm` (FragmentShiftedPrecursors, or a table derived from it).
+    See plans/fragment_mz_correction_in_sage.md.
     """
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
@@ -2125,6 +2157,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.search_pmsms = P.pmsms
         P.search_precursors = P.pre_sage_filtered_precursors
 
+    P.tof2mz_table = write_tof2mz_table(P.tdf)
+    # Materialized m/z is read only by exports and sage_map_to_pmsms, never by
+    # SAGE, so these nodes run only when one of those is requested.
     P.search_mz_pmsms = materialize_pmsms_mz(P.search_pmsms, P.tdf)
     current_mz_pmsms = P.search_mz_pmsms
     current_precursors = P.search_precursors
@@ -2286,17 +2321,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 # The recalibration search reads each sampled precursor's most
                 # probable raw MS2 spectrum in place; the fits below still apply to
                 # the main pmsms and precursors.
-                P.tof2mz_table = write_tof2mz_table(P.tdf)
                 P.recalibration_top_cell_precursors = top_cell_precursors(
                     P.recalibration_precursors, P.transmitted_ms1events, P.ms2_events
                 )
                 recalibration_spectra = P.ms2_events
                 recalibration_search_precursors = P.recalibration_top_cell_precursors
-                recalibration_tof2mz = P.tof2mz_table
             else:
-                recalibration_spectra = P.search_mz_pmsms
+                recalibration_spectra = P.search_pmsms
                 recalibration_search_precursors = P.recalibration_precursors
-                recalibration_tof2mz = None
             (
                 P.filtered_sage_results_json,
                 P.filtered_sage_results_pin,
@@ -2308,24 +2340,30 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fasta,
                 P.sage_config,
                 P.sage_binary,
-                tof2mz=recalibration_tof2mz,
+                tof2mz=P.tof2mz_table,
             )
             P.recalibration_config = write_recalibration_config(
                 text=tomlkit.dumps(cfg.recalibration)
             )
             (
-                P.recalibrated_mz_pmsms,
+                P.fragment_shifted_precursors,
                 P.fragment_mz_recalibration,
                 P.fragment_mz_search_tolerance,
                 P.fragment_mz_recalibration_fit_plot,
             ) = recalibrate_pmsms_mz(
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
-                P.search_mz_pmsms,
+                P.search_pmsms,
+                P.tof2mz_table,
                 P.search_precursors,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
+            P.recalibrated_mz_pmsms = materialize_recalibrated_pmsms_mz(
+                P.search_pmsms, P.tdf, P.fragment_mz_recalibration, P.fragment_shifted_precursors
+            )
+            # `fragment_shift_ppm` rides from here through every later precursor
+            # rewrite (m/z, RT, IIM) into the final search's precursors.
             (
                 P.recalibrated_precursors,
                 P.precursor_mz_search_tolerance,
@@ -2333,7 +2371,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.precursro_mz_recalibration_model_serialization,
             ) = recalibrate_precursors(
                 P.filtered_sage_results_tsv,
-                P.search_precursors,
+                P.fragment_shifted_precursors,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
@@ -2506,11 +2544,13 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
             ) = run_sage(
-                P.recalibrated_mz_pmsms,
+                P.search_pmsms,
                 current_precursors,
                 P.fasta,
                 P.recalibrated_sage_config_rt_iim,
                 P.sage_binary,
+                tof2mz=P.tof2mz_table,
+                mz_recalibration=P.fragment_mz_recalibration,
                 predicted_rt=P.predicted_rt,
                 predicted_iim=P.predicted_iim,
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
@@ -2537,11 +2577,12 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
             ) = run_sage(
-                P.search_mz_pmsms,
+                P.search_pmsms,
                 P.search_precursors,
                 P.fasta,
                 P.sage_config,
                 P.sage_binary,
+                tof2mz=P.tof2mz_table,
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
                 fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
             )

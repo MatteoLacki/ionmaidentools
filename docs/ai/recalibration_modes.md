@@ -9,7 +9,7 @@ sub-list; removed 2026-08-25, see below) — see
 `plans/rt_iim_independent_dimensions.md` for the RT/IIM independence split:
 
 1. **No recalibration** — no `[recalibration]` section at all. One SAGE
-   pass, `run_sage` directly on `search_mz_pmsms`/`search_precursors`.
+   pass, `run_sage` directly on `search_pmsms` (+ `tof2mz_table`)/`search_precursors`.
 2. **mz recalibration alone** — `[recalibration]` present, neither
    `[recalibration.rt]` nor `[recalibration.iim]`. Existing two-pass mz
    correction (`recalibrate_pmsms_mz`/`recalibrate_precursors`/
@@ -214,16 +214,17 @@ recalibration SAGE pass does not search the main pmsms. Each sampled precursor's
 most probable (frame, scan) raw MS2 spectrum is searched in place:
 
 - `write_tof2mz_table(tdf)` -> `Tof2MzTable`: the dense tof -> m/z table
-  `materialize_pmsms_mz` applies (float32 column `mz`; `timstofu.cli.write_tof2mz_table`).
+  (float32 column `mz`; `timstofu.cli.write_tof2mz_table`). Since 2026-10 every
+  `run_sage` call takes it (next section).
 - `top_cell_precursors(recalibration_precursors, transmitted_ms1events, ms2_events)`
   -> `TopCellPrecursors`: the same sample, with `fragment_spectrum_start` /
   `fragment_event_cnt` pointing at the first footprint row's (frame, scan) slice of
   `events.ms2/data.mmappet` (`timstofu.cli.top_cell_precursors`; footprint rows are
   sorted by probability, most probable first).
 - `run_sage(ms2_events, top_cell_precursors, ..., tof2mz=tof2mz_table)`: `run_sage`
-  takes either a pmsms or the raw `Ms2Events` store; with `tof2mz` it runs Sage with
-  `--pmsms <events.ms2>/data.mmappet --tof2mz <table>`. Needs a Sage built with
-  `--tof2mz` (git/sage `757eee0`).
+  takes either a pmsms or the raw `Ms2Events` store (told apart by the input's
+  `events.ms2` filename); for the latter it runs Sage with
+  `--pmsms <events.ms2>/data.mmappet --tof2mz <table>`.
 
 The fits (`recalibrate_pmsms_mz`, `recalibrate_precursors`, RT) are unchanged and
 still apply to the main pmsms and `search_precursors`: they read only the
@@ -237,3 +238,66 @@ SAGE on the raw top cells reproduced that search exactly on F9477 (all 47,917 PS
 235,629 matched fragments identical), and the pipeline's two tables equal the ones
 used there. Comparison with `f9477_best`:
 `git/pipeline_analysis/docs/ai/recalibration_paths.md`.
+
+## Fragment m/z correction applied inside SAGE (2026-10)
+
+Plan: necromerge2 `plans/fragment_mz_correction_in_sage.md`. Every `run_sage`
+reads fragment m/z as `tof2mz_table[tof]` from the pmsms' `tof` column; no search
+reads a materialized `mz` column any more (Sage's `mz`-column input was removed).
+
+- `recalibrate_pmsms_mz(filtered results, filtered matched fragments, search_pmsms,
+  tof2mz_table, search_precursors)` fits `bias + f_mz(mz) + f_rt(rt)` as before but
+  writes no pmsms. Outputs: `fragment_mz_recalibration` (`.mzcalib`, `mz` curve only,
+  bias 0), `fragment_shifted_precursors` (`search_precursors` plus
+  `fragment_shift_ppm = bias + f_rt(raw rt)`), tolerance and plot.
+- `recalibrate_precursors` reads `fragment_shifted_precursors`, so the column rides
+  through every later precursor rewrite (m/z, RT, IIM; each rewrites the whole
+  table) into the final search's `current_precursors`.
+- Final `run_sage(search_pmsms, current_precursors, ..., tof2mz=tof2mz_table,
+  mz_recalibration=fragment_mz_recalibration)`: Sage divides each fragment m/z by
+  `1 + (f_mz(mz) + fragment_shift_ppm)·1e-6` (git/sage `docs/ai/pmsms_input.md`).
+- Exports and `sage_map_to_pmsms` still need a materialized `mz`:
+  `materialize_pmsms_mz` (mode 1, uncorrected, label `search_mz_pmsms`) or
+  `materialize_recalibrated_pmsms_mz` (label `recalibrated_mz_pmsms`, same timstofu
+  CLI with `--mz-recalibration --precursors`, bit-identical to what Sage searched).
+  Neither runs unless an export or the mapping is requested.
+
+Why the shift is computed here and not by Sage from RT: in mode 3,
+`correct_precursors_rt` overwrites `rt` with corrected RT before the final search,
+while `f_rt` is fitted on raw RT. Evaluating it once, from raw RT, before any
+rewrite avoids that. The column is also where a different per-precursor fragment
+model would go without touching Sage (e.g. a 2-D `f(rt, 1/K0)`, or a free
+per-precursor intercept).
+
+Verified on `jobs/f9477_best.toml` (2026-10-02), against the materialized route's
+run of the same job file from 2026-10-01:
+
+- Final SAGE output: the same 358,374 PSMs (scannr, peptide, rank, charge) and the
+  same 2,245,176 matched fragments; 15 matched m/z differ by exactly one float32 ulp,
+  which moved `fragment_ppm`/`matched_intensity_pct`/`poisson`/`scored_candidates` on
+  35 PSMs and the LDA score by ~1e-7. SAGE-level peptides/ions at 1% `peptide_q`:
+  identical sets (21,124 / 24,656).
+- Cause of those ulps, measured over all 1,625,763,451 peaks: the fit is identical,
+  but `f_rt` used to be read off a 2,000-point linear grid at float32 RT and is now
+  the P-spline evaluated exactly at float64 RT (difference ≤7.6e-6 ppm, median
+  6.6e-7). That flips the float32 rounding of 20,720 peaks (1.3e-5) by one ulp.
+  The changed summation order (`f_mz + (bias + f_rt)`) alone flips none.
+- The old route's `.mzcalib` stored `bias = 0` while applying the real bias
+  (−3.03 ppm on this run) in memory; the bias now lives in `fragment_shift_ppm`.
+- mokapot: 27,679 -> 27,746 peptides, 33,674 -> 33,904 ions (+0.7%). Not a real
+  effect: mokapot (seed 1) reproduces its output byte for byte on an identical pin,
+  but applying only the 35 rows' tiny feature changes to the old pin already moves
+  it by +237 peptides / +205 ions, and the PSM row order (SAGE sorts by its LDA
+  score, which moved ~1e-7) shifts it further.
+- Export bit-identity: all 2,119,447 charge-1 matched peaks' m/z (after SAGE's own
+  `(mz - PROTON) + PROTON` float32 round trip) occur exactly in the same precursor's
+  slice of `materialize_recalibrated_pmsms_mz`'s output; against the uncorrected
+  `search_mz_pmsms` only 0.06% do.
+- Time and disk: `materialize_pmsms_mz` (20.4 s, a 6.5 GB `mz` column) no longer
+  runs, and `recalibrate_pmsms_mz` no longer writes the second 6.5 GB column; it
+  still takes ~13-20 s, dominated by its diagnostic plot (~5 s), the fit (~4 s),
+  imports and the `tof` range scan (~2.4 s). Final SAGE file IO is unchanged
+  (15.8 -> 15.6 s) with the lookup and correction done per peak. The recalibration
+  SAGE's file IO rose 6.4 -> 13.3 s in this incremental run because the `tof`
+  column was cold in the page cache (the old route read an `mz` column
+  `materialize_pmsms_mz` had just written); rerun warm it is 5.6 s.
