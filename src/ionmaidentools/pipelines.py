@@ -188,22 +188,6 @@ class TofFilteredPrecursors(PreSageFilteredPrecursors):
     filename = "tof_filtered_precursors.mmappet"
 
 
-class MzPmsms(Pmsms):
-    """A pmsms dataset with a materialized `mz` column (uncorrected), produced by
-    timstofu's materialize_pmsms_mz. Accepted wherever Pmsms is. Only exports and
-    sage_map_to_pmsms read it; SAGE reads `tof` through a Tof2MzTable."""
-
-    filename = "mz_pmsms.mmappet"
-
-
-class RecalibratedPmsms(MzPmsms):
-    """MzPmsms whose `mz` is recalibrated (RecalibratedTof2MzTable plus each
-    precursor's `fragment_shift_ppm`), produced by materialize_recalibrated_pmsms_mz
-    for exports. Accepted wherever MzPmsms (or, transitively, Pmsms) is."""
-
-    filename = "recalibrated_pmsms.mmappet"
-
-
 class FragmentShiftedPrecursors(PreSageFilteredPrecursors):
     """Precursors plus `fragment_shift_ppm` (`bias + f_rt(rt)`, from
     recalibrate_pmsms_mz): SAGE divides each of the precursor's fragment m/z by
@@ -389,8 +373,8 @@ class FragpipeDecoyFasta(NodeType):
 class SyntheticPmsms(Pmsms):
     """Fragment ions for peptides simulated from a FASTA (Koina-predicted, no
     real acquisition) -- see scripts/simulate_peptides_to_pmsms.py. mz is
-    baked in directly (unlike TofFilteredPmsms, which needs
-    materialize_pmsms_mz run on it first to gain an mz column)."""
+    baked in directly, with no `tof` (unlike real pmsms, whose m/z every
+    consumer reads through a Tof2MzTable)."""
 
     filename = "synthetic_pmsms.mmappet"
 
@@ -435,8 +419,10 @@ class TopCellPrecursors(RecalibrationPrecursors):
 
 
 class Tof2MzTable(MmappetDataset):
-    """Dense tof -> m/z table (float32 column `mz`): SAGE's `--tof2mz`, and the
-    table `materialize_pmsms_mz` looks m/z up in."""
+    """Dense tof -> m/z table (float32 column `mz`): `--tof2mz` of SAGE, the mzML
+    and MGF writers and sage-pmsms-mapper, which all read fragment m/z as
+    `table[tof]` (divided by `1 + fragment_shift_ppm·1e-6` when the precursors
+    carry that column)."""
 
     filename = "tof2mz.mmappet"
 
@@ -1023,34 +1009,6 @@ def select_recalibration_precursors(
 def write_recalibration_config(text: str):
     config = output(RecalibrationConfig)
     return config
-
-
-# numba `parallel=True` kernels take every core unless told otherwise, so these
-# two declare all cores to the scheduler and pin numba to exactly that.
-@command(
-    "NUMBA_NUM_THREADS={threads}"
-    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tof2mz} {output_pmsms}",
-    threads=CORES,
-)
-def materialize_pmsms_mz(input_pmsms: Pmsms, tof2mz: Tof2MzTable):
-    output_pmsms = output(MzPmsms)
-    return output_pmsms
-
-
-@command(
-    "NUMBA_NUM_THREADS={threads}"
-    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tof2mz} {output_pmsms}"
-    " --precursors {precursors}",
-    threads=CORES,
-)
-def materialize_recalibrated_pmsms_mz(
-    input_pmsms: Pmsms,
-    tof2mz: RecalibratedTof2MzTable,
-    precursors: FragmentShiftedPrecursors,
-):
-    """The m/z the final SAGE search read, materialized for exports."""
-    output_pmsms = output(RecalibratedPmsms)
-    return output_pmsms
 
 
 @command(
@@ -1808,13 +1766,14 @@ def filter_sage_results(sage_results_tsv: SageResultsTsv, fdr: int | float):
 
 @command(
     "venvs/common/bin/sage-pmsms-mapper {confident_psms} {matched_fragments}"
-    " {precursors} {pmsms} {mapped}"
+    " {precursors} {pmsms} {mapped} --tof2mz {tof2mz}"
 )
 def sage_map_to_pmsms(
     confident_psms: ConfidentPsmsParquet,
     matched_fragments: SageMatchedFragments,
     precursors: PreSageFilteredPrecursors,
     pmsms: Pmsms,
+    tof2mz: Tof2MzTable,
 ):
     mapped = output(SagePmsmsMapping)
     return mapped
@@ -1837,12 +1796,13 @@ def score_comparison(
 
 @command(
     "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
-    " --threads {threads} --numpress --zlib-level 9"
+    " --threads {threads} --numpress --zlib-level 9 --tof2mz {tof2mz}"
     " && test -f {mzml} && test -f {idmap}/schema.txt",
     threads=CORES,
 )
 def convert_search_pmsms_to_mzml(
     pmsms: Pmsms,
+    tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
 ):
     mzml = output(TofFilteredMzml)
@@ -1850,14 +1810,19 @@ def convert_search_pmsms_to_mzml(
     return mzml, idmap
 
 
+# `chattr +m`: no btrfs compression for the MGF (a no-op elsewhere). Compressing
+# ~24 GiB of text in writeback throttles the writer: F9477 84 s -> 70 s without it,
+# at the cost of the file's full size on disk.
 @command(
-    "venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} {config_path} {mgf}"
-    " --threads_cnt {threads}"
+    "(chattr +m {workdir} 2>/dev/null || true)"
+    " && venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} {config_path} {mgf}"
+    " --threads_cnt {threads} --tof2mz {tof2mz}"
     " && test -f {mgf}",
     threads=CORES,
 )
 def convert_search_pmsms_to_mgf(
     pmsms: Pmsms,
+    tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
     config_path: str,
 ):
@@ -2152,10 +2117,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.search_precursors = P.pre_sage_filtered_precursors
 
     P.tof2mz_table = write_tof2mz_table(P.tdf)
-    # Materialized m/z is read only by exports and sage_map_to_pmsms, never by
-    # SAGE, so these nodes run only when one of those is requested.
-    P.search_mz_pmsms = materialize_pmsms_mz(P.search_pmsms, P.tof2mz_table)
-    current_mz_pmsms = P.search_mz_pmsms
+    current_tof2mz_table = P.tof2mz_table
     current_precursors = P.search_precursors
 
     # Search
@@ -2277,12 +2239,13 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             _final_pass_fragment_intensity_index = None
             _final_pass_fragment_intensity_cache_path = ""
 
-        def _finalize_confident_psms(search_precursors, mz_pmsms, search_pmsms):
+        def _finalize_confident_psms(search_precursors, tof2mz_table, search_pmsms):
             """confident_psms -> sage_pmsms_mapping -> score_comparison, the
             same three calls needed after any final `run_sage` call
             (mode-1/2/3 alike, see `recalibration_modes.md`) -- only which
-            precursors/pmsms Nodes get passed differs: raw `search_*` Nodes
-            when there's no recalibration at all, the recalibrated ones
+            precursors/table Nodes get passed differs: the raw table and
+            `search_precursors` when there's no recalibration at all, the
+            recalibrated table and the `fragment_shift_ppm`-carrying precursors
             otherwise. Kept as a plain closure over `P`/`cfg`, not a new
             necroflow rule -- it only groups three existing rule calls."""
             P.confident_psms = filter_sage_results(
@@ -2292,7 +2255,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.confident_psms,
                 P.sage_matched_fragments,
                 search_precursors,
-                mz_pmsms,
+                search_pmsms,
+                tof2mz_table,
             )
             P.score_comparison = score_comparison(
                 search_precursors,
@@ -2351,9 +2315,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.search_precursors,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
-            )
-            P.recalibrated_mz_pmsms = materialize_recalibrated_pmsms_mz(
-                P.search_pmsms, P.recalibrated_tof2mz_table, P.fragment_shifted_precursors
             )
             # `fragment_shift_ppm` rides from here through every later precursor
             # rewrite (m/z, RT, IIM) into the final search's precursors.
@@ -2559,9 +2520,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 fdr=cfg.sage_summarize.fdr,
             )
             _finalize_confident_psms(
-                P.search_precursors, P.recalibrated_mz_pmsms, P.search_pmsms
+                P.fragment_shifted_precursors, P.recalibrated_tof2mz_table, P.search_pmsms
             )
-            current_mz_pmsms = P.recalibrated_mz_pmsms
+            current_tof2mz_table = P.recalibrated_tof2mz_table
         else:
             (
                 P.sage_results_json,
@@ -2579,7 +2540,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
             )
             _finalize_confident_psms(
-                P.search_precursors, P.search_mz_pmsms, P.search_pmsms
+                P.search_precursors, P.tof2mz_table, P.search_pmsms
             )
 
         # getattr, not `P.predicted_rt` directly -- the non-recalibration
@@ -2620,20 +2581,22 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.sage_results_tsv, P.sage_summarize_module, fdr=cfg.sage_summarize.fdr
         )
 
-    # Exports -- current_mz_pmsms/current_precursors are the mz/rt/iim-corrected
-    # outputs when recalibration ran (mode 2: mz only; mode 3: mz+RT+IIM),
-    # otherwise the plain (uncorrected) MzPmsms/search_precursors from
-    # materialize_pmsms_mz above (mode 1). Both must come from the same mode
+    # Exports -- current_tof2mz_table/current_precursors are the recalibrated
+    # table and the mz/rt/iim-corrected precursors (carrying `fragment_shift_ppm`)
+    # when recalibration ran (mode 2: mz only; mode 3: mz+RT+IIM), otherwise the
+    # raw table and search_precursors (mode 1). Both must come from the same mode
     # SAGE1 actually searched against, or the exported headers and the SAGE
     # results disagree on what a peak's mz/rt/iim actually was -- see
-    # plans/better_sage_filtering.md's B.6.
+    # plans/better_sage_filtering.md's B.6. The writers read fragment m/z as SAGE
+    # does, from `tof` (plans/exports_from_tof2mz_table.md).
     P.search_mzml, P.search_mzml_idmap = convert_search_pmsms_to_mzml(
-        current_mz_pmsms, current_precursors,
+        P.search_pmsms, current_tof2mz_table, current_precursors,
     )
     mgf_config_path = cfg.get("mgf", {}).get("config_path")
     if mgf_config_path:
         P.search_mgf = convert_search_pmsms_to_mgf(
-            current_mz_pmsms,
+            P.search_pmsms,
+            current_tof2mz_table,
             current_precursors,
             config_path=mgf_config_path,
         )

@@ -260,13 +260,24 @@ column (Sage's `mz`-column input was removed).
   `table[tof] / (1 + fragment_shift_ppm·1e-6)`, applying the shift whenever the
   precursors table has the column (git/sage `docs/ai/pmsms_input.md`). The
   recalibration search uses the raw `tof2mz_table` and precursors without the column.
-- Exports and `sage_map_to_pmsms` still need a materialized `mz`:
-  `materialize_pmsms_mz(search_pmsms, tof2mz_table)` (mode 1, label
-  `search_mz_pmsms`) or `materialize_recalibrated_pmsms_mz(search_pmsms,
-  recalibrated_tof2mz_table, fragment_shifted_precursors)` (label
-  `recalibrated_mz_pmsms`); both are timstofu's `materialize_pmsms_mz`, which reads
-  the table rather than the `.d`. Neither runs unless an export or the mapping is
-  requested.
+- Exports and `sage_map_to_pmsms` read m/z the same way, from `search_pmsms` with
+  `--tof2mz` (since 2026-10-05, `plans/exports_from_tof2mz_table.md`):
+  `convert_search_pmsms_to_mzml`/`convert_search_pmsms_to_mgf` get
+  `current_tof2mz_table` + `current_precursors` (raw table and `search_precursors` in
+  mode 1, recalibrated table and the shifted precursors after recalibration), and
+  `sage_map_to_pmsms` gets the table + `fragment_shifted_precursors`. Nothing in the
+  pipeline materializes `mz`; the `materialize_pmsms_mz`/
+  `materialize_recalibrated_pmsms_mz` rules and `MzPmsms`/`RecalibratedPmsms` are
+  gone. timstofu's `materialize_pmsms_mz` CLI remains as a standalone tool.
+  Verified on F9477 (2026-10-05) against materialize-then-write: MGF byte-identical,
+  `--indexed` mzML byte-identical, pipeline (directory-mode) mzML identical per
+  precursor across all 923,634 spectra (its write order is run-dependent either way),
+  `sage_map_to_pmsms` tables identical. Times: mzML 47.4 s vs 8.8 s + 47.8 s, MGF
+  88.5 s vs 8.8 s + 84.9 s, mapping 8.2 s vs 8.8 s + 8.4 s, with no 6.5 GB `mz` column.
+- `convert_search_pmsms_to_mgf` runs `chattr +m {workdir}` first (a no-op off btrfs):
+  compressing ~24 GiB of text with zstd during writeback throttled the writer. F9477
+  MGF step 90.9 s -> 74.6 s, byte-identical output; the file then takes its full size
+  on disk.
 
 The table is float64 because a float32 one would round every m/z twice: measured on
 F9477, that moves 25% of peaks by one float32 ulp against the single rounding, while
