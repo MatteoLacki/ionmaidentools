@@ -241,26 +241,53 @@ used there. Comparison with `f9477_best`:
 
 ## Fragment m/z correction applied inside SAGE (2026-10)
 
-Plan: necromerge2 `plans/fragment_mz_correction_in_sage.md`. Every `run_sage`
-reads fragment m/z as `tof2mz_table[tof]` from the pmsms' `tof` column; no search
-reads a materialized `mz` column any more (Sage's `mz`-column input was removed).
+Plans: necromerge2 `plans/fragment_mz_correction_in_sage.md`, simplified by
+`plans/fragment_mz_corrected_tof2mz_table.md`. Every `run_sage` reads fragment m/z
+as `tof2mz[tof]` from the pmsms' `tof` column; no search reads a materialized `mz`
+column (Sage's `mz`-column input was removed).
 
-- `recalibrate_pmsms_mz(filtered results, filtered matched fragments, search_pmsms,
-  tof2mz_table, search_precursors)` fits `bias + f_mz(mz) + f_rt(rt)` as before but
-  writes no pmsms. Outputs: `fragment_mz_recalibration` (`.mzcalib`, `mz` curve only,
-  bias 0), `fragment_shifted_precursors` (`search_precursors` plus
-  `fragment_shift_ppm = bias + f_rt(raw rt)`), tolerance and plot.
+- `recalibrate_pmsms_mz(filtered results, filtered matched fragments, tof2mz_table,
+  search_precursors)` fits `bias + f_mz(mz) + f_rt(rt)` and writes no pmsms.
+  Outputs: `recalibrated_tof2mz_table` (`RecalibratedTof2MzTable`, float64,
+  `table[t] / (1 + f_mz(table[t])·1e-6)`), `fragment_shifted_precursors`
+  (`search_precursors` plus `fragment_shift_ppm = bias + f_rt(raw rt)`), tolerance
+  and plot.
 - `recalibrate_precursors` reads `fragment_shifted_precursors`, so the column rides
   through every later precursor rewrite (m/z, RT, IIM; each rewrites the whole
   table) into the final search's `current_precursors`.
-- Final `run_sage(search_pmsms, current_precursors, ..., tof2mz=tof2mz_table,
-  mz_recalibration=fragment_mz_recalibration)`: Sage divides each fragment m/z by
-  `1 + (f_mz(mz) + fragment_shift_ppm)·1e-6` (git/sage `docs/ai/pmsms_input.md`).
+- Final `run_sage(search_pmsms, current_precursors, ...,
+  tof2mz=recalibrated_tof2mz_table)`: Sage reads each fragment m/z as
+  `table[tof] / (1 + fragment_shift_ppm·1e-6)`, applying the shift whenever the
+  precursors table has the column (git/sage `docs/ai/pmsms_input.md`). The
+  recalibration search uses the raw `tof2mz_table` and precursors without the column.
 - Exports and `sage_map_to_pmsms` still need a materialized `mz`:
-  `materialize_pmsms_mz` (mode 1, uncorrected, label `search_mz_pmsms`) or
-  `materialize_recalibrated_pmsms_mz` (label `recalibrated_mz_pmsms`, same timstofu
-  CLI with `--mz-recalibration --precursors`, bit-identical to what Sage searched).
-  Neither runs unless an export or the mapping is requested.
+  `materialize_pmsms_mz(search_pmsms, tof2mz_table)` (mode 1, label
+  `search_mz_pmsms`) or `materialize_recalibrated_pmsms_mz(search_pmsms,
+  recalibrated_tof2mz_table, fragment_shifted_precursors)` (label
+  `recalibrated_mz_pmsms`); both are timstofu's `materialize_pmsms_mz`, which reads
+  the table rather than the `.d`. Neither runs unless an export or the mapping is
+  requested.
+
+The table is float64 because a float32 one would round every m/z twice: measured on
+F9477, that moves 25% of peaks by one float32 ulp against the single rounding, while
+float64 moves essentially none.
+
+Verified on `jobs/f9477_best.toml` (2026-10-05), paired with the `.mzcalib` route's
+fresh run on the same first pass:
+
+- Identical fit (`fragment_shift_ppm` bit-identical). 1,434,812 of 1,625,763,451
+  peaks (0.088%) move by one float32 ulp, almost all from evaluating `f_mz` exactly
+  instead of off the old 2,000-point grid (interpolation error up to 6e-4 ppm);
+  dividing in two steps instead of adding ppm accounts for 40,117.
+- Final SAGE: 2,038 of 2,245,145 matched m/z differ (one ulp, five by more), 6/7
+  PSM rows differ; SAGE-level peptides/ions at 1% `peptide_q` 21,123 / 24,653 on
+  both routes (3 peptides, 4 ions swapped). mokapot 27,478 -> 28,061 peptides,
+  33,597 -> 34,290 ions: its input sensitivity amplifying those changes, not an
+  effect of the route.
+- Export: all 2,119,448 charge-1 matched peaks found bit-exact in
+  `materialize_recalibrated_pmsms_mz`'s output, which now takes 8.4 s (one pass,
+  no `.d`) instead of ~22 s.
+- Steps: `recalibrate_pmsms_mz` 12.5 s (15.2 s before), final SAGE 79.5 s (79.7 s).
 
 Why the shift is computed here and not by Sage from RT: in mode 3,
 `correct_precursors_rt` overwrites `rt` with corrected RT before the final search,
@@ -269,8 +296,9 @@ rewrite avoids that. The column is also where a different per-precursor fragment
 model would go without touching Sage (e.g. a 2-D `f(rt, 1/K0)`, or a free
 per-precursor intercept).
 
-Verified on `jobs/f9477_best.toml` (2026-10-02), against the materialized route's
-run of the same job file from 2026-10-01:
+First version (SAGE evaluated an `mz`-only `.mzcalib` per peak), verified on
+`jobs/f9477_best.toml` (2026-10-02) against the materialized route's run of the same
+job file from 2026-10-01:
 
 - Final SAGE output: the same 358,374 PSMs (scannr, peptide, rank, charge) and the
   same 2,245,176 matched fragments; 15 matched m/z differ by exactly one float32 ulp,

@@ -196,27 +196,18 @@ class MzPmsms(Pmsms):
     filename = "mz_pmsms.mmappet"
 
 
-class MzRecalibration(NodeType):
-    """Grid-sampled fragment m/z ppm-correction artifact with the single dimension
-    "mz" (`f_mz`, bias 0), produced by recalibrate_pmsms_mz. Read by SAGE's
-    `--mz-recalibration` and materialize_recalibrated_pmsms_mz, both together with
-    FragmentShiftedPrecursors' `fragment_shift_ppm`."""
-
-    filename = "mz_recalibration.mzcalib"
-
-
 class RecalibratedPmsms(MzPmsms):
-    """MzPmsms whose `mz` is recalibrated (`f_mz` plus each precursor's
-    `fragment_shift_ppm`), produced by materialize_recalibrated_pmsms_mz for exports.
-    Accepted wherever MzPmsms (or, transitively, Pmsms) is."""
+    """MzPmsms whose `mz` is recalibrated (RecalibratedTof2MzTable plus each
+    precursor's `fragment_shift_ppm`), produced by materialize_recalibrated_pmsms_mz
+    for exports. Accepted wherever MzPmsms (or, transitively, Pmsms) is."""
 
     filename = "recalibrated_pmsms.mmappet"
 
 
 class FragmentShiftedPrecursors(PreSageFilteredPrecursors):
     """Precursors plus `fragment_shift_ppm` (`bias + f_rt(rt)`, from
-    recalibrate_pmsms_mz): the per-precursor ppm term SAGE's `--mz-recalibration`
-    adds to `f_mz`. Accepted wherever PreSageFilteredPrecursors is."""
+    recalibrate_pmsms_mz): SAGE divides each of the precursor's fragment m/z by
+    `1 + fragment_shift_ppm·1e-6`. Accepted wherever PreSageFilteredPrecursors is."""
 
     filename = "fragment_shifted_precursors.mmappet"
 
@@ -445,9 +436,17 @@ class TopCellPrecursors(RecalibrationPrecursors):
 
 class Tof2MzTable(MmappetDataset):
     """Dense tof -> m/z table (float32 column `mz`): SAGE's `--tof2mz`, and the
-    values `materialize_pmsms_mz` writes."""
+    table `materialize_pmsms_mz` looks m/z up in."""
 
     filename = "tof2mz.mmappet"
+
+
+class RecalibratedTof2MzTable(Tof2MzTable):
+    """Tof2MzTable with the fragment `f_mz` correction folded in (float64 column `mz`,
+    `table[t] / (1 + f_mz(table[t])·1e-6)`), produced by recalibrate_pmsms_mz.
+    Accepted wherever Tof2MzTable is."""
+
+    filename = "recalibrated_tof2mz.mmappet"
 
 
 class RecalibrationConfig(NodeType):
@@ -1030,50 +1029,48 @@ def write_recalibration_config(text: str):
 # two declare all cores to the scheduler and pin numba to exactly that.
 @command(
     "NUMBA_NUM_THREADS={threads}"
-    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tdf} {output_pmsms}",
+    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tof2mz} {output_pmsms}",
     threads=CORES,
 )
-def materialize_pmsms_mz(input_pmsms: Pmsms, tdf: BrukerD):
+def materialize_pmsms_mz(input_pmsms: Pmsms, tof2mz: Tof2MzTable):
     output_pmsms = output(MzPmsms)
     return output_pmsms
 
 
 @command(
     "NUMBA_NUM_THREADS={threads}"
-    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tdf} {output_pmsms}"
-    " --mz-recalibration {mz_recalibration} --precursors {precursors}",
+    " venvs/common/bin/materialize_pmsms_mz {input_pmsms} {tof2mz} {output_pmsms}"
+    " --precursors {precursors}",
     threads=CORES,
 )
 def materialize_recalibrated_pmsms_mz(
     input_pmsms: Pmsms,
-    tdf: BrukerD,
-    mz_recalibration: MzRecalibration,
+    tof2mz: RecalibratedTof2MzTable,
     precursors: FragmentShiftedPrecursors,
 ):
-    """The m/z SAGE searched with `--mz-recalibration`, materialized for exports."""
+    """The m/z the final SAGE search read, materialized for exports."""
     output_pmsms = output(RecalibratedPmsms)
     return output_pmsms
 
 
 @command(
-    "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments} {pmsms}"
-    " {tof2mz} {precursors} {output_precursors} {mz_recalibration} {tolerance} {plot}"
+    "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments}"
+    " {tof2mz} {precursors} {output_precursors} {recalibrated_tof2mz} {tolerance} {plot}"
     " --config {config} --fdr {fdr}",
 )
 def recalibrate_pmsms_mz(
     sage_results_tsv: SageResultsTsv,
     matched_fragments: SageMatchedFragments,
-    pmsms: Pmsms,
     tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
     fdr: int | float,
 ):
     output_precursors = output(FragmentShiftedPrecursors)
-    mz_recalibration = output(MzRecalibration)
+    recalibrated_tof2mz = output(RecalibratedTof2MzTable)
     tolerance = output(FragmentTolerance)
     plot = output(Png)
-    return output_precursors, mz_recalibration, tolerance, plot
+    return output_precursors, recalibrated_tof2mz, tolerance, plot
 
 
 @command(
@@ -1361,8 +1358,6 @@ def _run_sage_command(args: CommandArgs) -> str:
     matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
 
     flags = f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
-    if args.inputs.mz_recalibration is not None:
-        flags += f" --mz-recalibration {shlex.quote(str(args.inputs.mz_recalibration))}"
     if args.inputs.predicted_rt is not None:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
     if args.inputs.predicted_iim is not None:
@@ -1399,7 +1394,6 @@ def run_sage(
     sage_config: SageConfig,
     sage_binary: SageBinary,
     tof2mz: Tof2MzTable,
-    mz_recalibration: MzRecalibration | None = None,
     predicted_rt: PredictedRt | None = None,
     predicted_iim: PredictedIim | None = None,
     predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
@@ -1429,10 +1423,10 @@ def run_sage(
     Sage reads fragment m/z as `tof2mz[tof]` from `pmsms`' `tof` column. `pmsms`
     is either a pmsms, or the raw `Ms2Events` store, read in place as
     `<events.ms2>/data.mmappet` with `precursors` addressing its spectra (e.g.
-    `top_cell_precursors`). `mz_recalibration` (a mixed Node/`None` input) turns
-    on Sage's `--mz-recalibration`; `precursors` must then carry
-    `fragment_shift_ppm` (FragmentShiftedPrecursors, or a table derived from it).
-    See plans/fragment_mz_correction_in_sage.md.
+    `top_cell_precursors`). For the recalibrated final search `tof2mz` is a
+    RecalibratedTof2MzTable and `precursors` carry `fragment_shift_ppm`
+    (FragmentShiftedPrecursors, or a table derived from it), which Sage applies
+    whenever the column is present. See plans/fragment_mz_corrected_tof2mz_table.md.
     """
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
@@ -2160,7 +2154,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.tof2mz_table = write_tof2mz_table(P.tdf)
     # Materialized m/z is read only by exports and sage_map_to_pmsms, never by
     # SAGE, so these nodes run only when one of those is requested.
-    P.search_mz_pmsms = materialize_pmsms_mz(P.search_pmsms, P.tdf)
+    P.search_mz_pmsms = materialize_pmsms_mz(P.search_pmsms, P.tof2mz_table)
     current_mz_pmsms = P.search_mz_pmsms
     current_precursors = P.search_precursors
 
@@ -2347,20 +2341,19 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             )
             (
                 P.fragment_shifted_precursors,
-                P.fragment_mz_recalibration,
+                P.recalibrated_tof2mz_table,
                 P.fragment_mz_search_tolerance,
                 P.fragment_mz_recalibration_fit_plot,
             ) = recalibrate_pmsms_mz(
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
-                P.search_pmsms,
                 P.tof2mz_table,
                 P.search_precursors,
                 P.recalibration_config,
                 fdr=cfg.sage_summarize.fdr,
             )
             P.recalibrated_mz_pmsms = materialize_recalibrated_pmsms_mz(
-                P.search_pmsms, P.tdf, P.fragment_mz_recalibration, P.fragment_shifted_precursors
+                P.search_pmsms, P.recalibrated_tof2mz_table, P.fragment_shifted_precursors
             )
             # `fragment_shift_ppm` rides from here through every later precursor
             # rewrite (m/z, RT, IIM) into the final search's precursors.
@@ -2549,8 +2542,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fasta,
                 P.recalibrated_sage_config_rt_iim,
                 P.sage_binary,
-                tof2mz=P.tof2mz_table,
-                mz_recalibration=P.fragment_mz_recalibration,
+                tof2mz=P.recalibrated_tof2mz_table,
                 predicted_rt=P.predicted_rt,
                 predicted_iim=P.predicted_iim,
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
