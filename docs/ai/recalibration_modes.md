@@ -202,10 +202,10 @@ before), even though the config bytes are identical — a single cheap
 `update_sage_config_rt_iim` node plus one `run_sage` rerun, not a
 correctness concern.
 
-The repeated `confident_psms → sage_pmsms_mapping → score_comparison`
-trio (previously written out once per branch) is now one
-`_finalize_confident_psms` closure inside `ionmaiden_pipeline`, called from
-both the no-recalibration and recalibration code paths.
+`confident_psms → score_comparison` runs once, after whichever final
+`run_sage` the mode used (it was a `_finalize_confident_psms` closure called
+from each branch while it also needed the branch's table and precursors for
+`sage_map_to_pmsms`, removed 2026-10-06).
 
 ## Recalibration spectra from raw MS2 top cells: `[recalibration_top_cell]` (2026-09-29)
 
@@ -260,12 +260,13 @@ column (Sage's `mz`-column input was removed).
   `table[tof] / (1 + fragment_shift_ppm·1e-6)`, applying the shift whenever the
   precursors table has the column (git/sage `docs/ai/pmsms_input.md`). The
   recalibration search uses the raw `tof2mz_table` and precursors without the column.
-- Exports and `sage_map_to_pmsms` read m/z the same way, from `search_pmsms` with
-  `--tof2mz` (since 2026-10-05, `plans/exports_from_tof2mz_table.md`):
+- Exports read m/z the same way, from `search_pmsms` with `--tof2mz` (since
+  2026-10-05, `plans/exports_from_tof2mz_table.md`):
   `convert_search_pmsms_to_mzml`/`convert_search_pmsms_to_mgf` get
   `current_tof2mz_table` + `current_precursors` (raw table and `search_precursors` in
-  mode 1, recalibrated table and the shifted precursors after recalibration), and
-  `sage_map_to_pmsms` gets the table + `fragment_shifted_precursors`. Nothing in the
+  mode 1, recalibrated table and the shifted precursors after recalibration).
+  `sage_map_to_pmsms` was removed on 2026-10-06: SAGE exports each matched peak's pmsms
+  row (`fragment_pmsms_row`), which `score_comparison` reads directly. Nothing in the
   pipeline materializes `mz`; the `materialize_pmsms_mz`/
   `materialize_recalibrated_pmsms_mz` rules and `MzPmsms`/`RecalibratedPmsms` are
   gone. timstofu's `materialize_pmsms_mz` CLI remains as a standalone tool.

@@ -286,10 +286,6 @@ class ConfidentPsmsParquet(NodeType):
     filename = "confident_psms.parquet"
 
 
-class SagePmsmsMapping(NodeType):
-    filename = "sage_mapped_to_pmsms"
-
-
 class ScoreComparisonPlots(NodeType):
     filename = "score_comparison"
 
@@ -420,7 +416,7 @@ class TopCellPrecursors(RecalibrationPrecursors):
 
 class Tof2MzTable(MmappetDataset):
     """Dense tof -> m/z table (float32 column `mz`): `--tof2mz` of SAGE, the mzML
-    and MGF writers and sage-pmsms-mapper, which all read fragment m/z as
+    and MGF writers, which all read fragment m/z as
     `table[tof]` (divided by `1 + fragment_shift_ppm·1e-6` when the precursors
     carry that column)."""
 
@@ -1765,31 +1761,17 @@ def filter_sage_results(sage_results_tsv: SageResultsTsv, fdr: int | float):
 
 
 @command(
-    "venvs/common/bin/sage-pmsms-mapper {confident_psms} {matched_fragments}"
-    " {precursors} {pmsms} {mapped} --tof2mz {tof2mz}"
-)
-def sage_map_to_pmsms(
-    confident_psms: ConfidentPsmsParquet,
-    matched_fragments: SageMatchedFragments,
-    precursors: PreSageFilteredPrecursors,
-    pmsms: Pmsms,
-    tof2mz: Tof2MzTable,
-):
-    mapped = output(SagePmsmsMapping)
-    return mapped
-
-
-@command(
-    "venvs/common/bin/sage_score_mapper {precursors} {pmsms}"
-    " {mapping}/precursors.parquet {mapping}/mapping.parquet"
+    "venvs/common/bin/sage_score_mapper {pmsms} {confident_psms} {matched_fragments}"
     " --config {config} -o {plots}"
 )
 def score_comparison(
-    precursors: PreSageFilteredPrecursors,
     pmsms: Pmsms,
-    mapping: SagePmsmsMapping,
+    confident_psms: ConfidentPsmsParquet,
+    matched_fragments: SageMatchedFragments,
     config: PseudomsmsConfig,
 ):
+    """mkpmsms scores of the peaks SAGE matched for confident PSMs (its
+    `fragment_pmsms_row`) against all other pmsms peaks."""
     plots = output(ScoreComparisonPlots)
     return plots
 
@@ -2239,32 +2221,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             _final_pass_fragment_intensity_index = None
             _final_pass_fragment_intensity_cache_path = ""
 
-        def _finalize_confident_psms(search_precursors, tof2mz_table, search_pmsms):
-            """confident_psms -> sage_pmsms_mapping -> score_comparison, the
-            same three calls needed after any final `run_sage` call
-            (mode-1/2/3 alike, see `recalibration_modes.md`) -- only which
-            precursors/table Nodes get passed differs: the raw table and
-            `search_precursors` when there's no recalibration at all, the
-            recalibrated table and the `fragment_shift_ppm`-carrying precursors
-            otherwise. Kept as a plain closure over `P`/`cfg`, not a new
-            necroflow rule -- it only groups three existing rule calls."""
-            P.confident_psms = filter_sage_results(
-                P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
-            )
-            P.sage_pmsms_mapping = sage_map_to_pmsms(
-                P.confident_psms,
-                P.sage_matched_fragments,
-                search_precursors,
-                search_pmsms,
-                tof2mz_table,
-            )
-            P.score_comparison = score_comparison(
-                search_precursors,
-                search_pmsms,
-                P.sage_pmsms_mapping,
-                P.pseudomsms_config,
-            )
-
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
                 write_recalibration_precursor_selection_config(
@@ -2519,9 +2475,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.fragment_mz_search_tolerance,
                 fdr=cfg.sage_summarize.fdr,
             )
-            _finalize_confident_psms(
-                P.fragment_shifted_precursors, P.recalibrated_tof2mz_table, P.search_pmsms
-            )
             current_tof2mz_table = P.recalibrated_tof2mz_table
         else:
             (
@@ -2539,9 +2492,11 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
                 fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
             )
-            _finalize_confident_psms(
-                P.search_precursors, P.tof2mz_table, P.search_pmsms
-            )
+
+        P.confident_psms = filter_sage_results(P.sage_results_tsv, fdr=cfg.sage_summarize.fdr)
+        P.score_comparison = score_comparison(
+            P.search_pmsms, P.confident_psms, P.sage_matched_fragments, P.pseudomsms_config,
+        )
 
         # getattr, not `P.predicted_rt` directly -- the non-recalibration
         # branch above never binds these labels at all (only the
