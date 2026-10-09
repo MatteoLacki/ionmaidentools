@@ -665,7 +665,11 @@ def tdf2ms1(tdf: BrukerD):
     return ms1
 
 
-@command("git/ionmaidenmetal/build/tdf2ms ms2 {tdf} {ms2} --overwrite")
+@command(
+    "git/ionmaidenmetal/build/tdf2ms ms2 {tdf} {ms2} --overwrite"
+    " && test -f {ms2}/frame_row_starts.mmappet/0.bin"
+    " && test -f {ms2}/frame_scan_diff.mmappet/0.bin"
+)
 def tdf2ms2(tdf: BrukerD):
     ms2 = output(Ms2Events)
     return ms2
