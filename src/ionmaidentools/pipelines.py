@@ -653,7 +653,7 @@ def write_pipeline_config(text: str):
 @command(
     "git/ionmaidenmetal/build/tdf2ms ms1 {tdf} {ms1}"
     " --threads {threads} --paced-writeback-mib 1024 --implicit-tof-urt --overwrite"
-    " && test -f {ms1}/tof_row_starts.mmappet/schema.txt"
+    " && grep -qx 'uint64 x' {ms1}/tof_row_starts.mmappet/schema.txt"
     " && test -f {ms1}/tof_urt_diff_index.mmappet/schema.txt"
     " && grep -qx 'uint32 scan' {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt"
     " && grep -qx 'uint32 intensity' {ms1}/tof_urt_scan_ordered_data.mmappet/schema.txt"
