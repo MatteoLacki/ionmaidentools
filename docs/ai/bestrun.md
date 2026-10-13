@@ -10,7 +10,29 @@ current-best config to point people (or agents) at, instead of having to
 dig through `docs/ai/mokapot_integration.md`'s ablation table history to
 figure out which combination currently wins.
 
-## Current best (as of 2026-09-01)
+## Current best (as of 2026-10-07)
+
+Same config as below plus mkpmsms `"ms2-peak-picker" = "local_max_intensity"` (was
+`local_max_score`): each fragment peak is written at its most intense TOF bin instead of its
+best-scoring one. Chosen by the peak-position experiment on F9477 and F9468 (necromerge2
+`plans/tof_centroid_experiment.md`; findings in git/ionmaidenmetal `docs/ai/tof_centroid.md` on
+branch `experiment/tof-centroid`). `jobs/f9468_benchmark.toml`, the F9468 port, changed the same way.
+
+Unique target peptides (`mokapot.peptides.txt`, q ≤ 1%) and ions (distinct (peptide, charge) of
+target PSMs, q ≤ 1%):
+
+| run | PSMs | peptides | ions |
+|---|---|---|---|
+| main, production binaries, mokapot seed 1 (2026-10-07) | 100,166 | 28,583 | **34,995** |
+| experiment run, same config, mokapot seeds 1–3 mean | | 28,435 | 34,802 |
+| previous config (`local_max_score`), seeds 1–3 mean | | 27,915 | 34,286 |
+
+SAGE alone (rank 1, peptide q ≤ 1%): 21,475 peptides / 25,142 ions (was 21,122 / 24,652).
+On F9468: mokapot seeds 1–3 mean 30,689 / 38,454 (was 29,740 / 36,625). One mkpmsms run per
+config; mkpmsms' row order alone moves mokapot by ~1%. The peptide column is not comparable
+with the 2026-09-01 entry below, which counted differently.
+
+## Previous best (2026-09-01)
 
 RT-only recalibration + fragment-intensity + mokapot(xgboost), no IIM:
 
