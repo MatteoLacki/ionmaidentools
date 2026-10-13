@@ -65,6 +65,7 @@ measurements for each feature live in `docs/ai/`, one file per topic:
 | `docs/ai/recalibration_modes.md` | The three mz/RT/IIM recalibration modes, table-presence gating, tolerance percentiles/method, `server_url`, fragment m/z correction applied inside SAGE (`fragment_shift_ppm`) |
 | `docs/ai/run_sage_merge.md` | `run_sage`/`run_sage_with_predicted` merged into one mixed-Node/value rule |
 | `docs/ai/mokapot_integration.md` | Config-driven mokapot plugin, leakage-safe PIN filtering, real F9477 ablation-grid measurements |
+| `docs/ai/fdr_levels.md` | Spectra/peptidoforms/ions at 1% FDR as the last step of `run_sage`/`mokapot`, and recording runs in `$ION_MAIDEN_REGRESSION_DB` |
 | `docs/ai/rt_iim_caching.md` | `predict_rt`/`predict_iim`'s `PredictionCache` wiring, necroflow gotchas, measured payoff |
 | `docs/ai/mass_grid_plots.md` | Request-only mass-grid heatmaps (SAGE index, Koina predictions) and peptide length histogram; why the Koina builder computes fragment m/z |
 | `docs/ai/bestrun.md` | `jobs/f9477_best.toml` — the standing best-known-config job, current numbers, and the ask-before-updating rule |

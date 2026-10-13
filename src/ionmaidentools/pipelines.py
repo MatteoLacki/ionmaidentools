@@ -1,8 +1,9 @@
 """Necroflow ionmaiden pipeline.
 
-TODO(regression-db): the old Snakemake `sage_summarize`/`short_test` rules recorded
-results into a SQLite regression DB and did an interactive baseline comparison. Neither
-is ported here -- `sage_summary` is the pipeline's terminal output.
+`run_sage` and `mokapot` count their confident spectra, peptidoforms and ions as the last
+step of their own commands (`sage-fdr-levels`/`mokapot-fdr-levels`, git/searchops) and,
+when `ION_MAIDEN_REGRESSION_DB` is set, record the run there (git/searchops
+`docs/ai/run_db.md`).
 
 Fingerprint v3 used.
 """
@@ -222,6 +223,10 @@ class SageMatchedFragments(NodeType):
     filename = "matched_fragments.sage.tsv"
 
 
+class SageFdrLevels(NodeType):
+    filename = "results.sage.fdr_levels.tsv"
+
+
 class DumpPeptidesBinary(NodeType):
     filename = "dump_peptides"
 
@@ -280,6 +285,10 @@ class MokapotPeptides(NodeType):
 
 class MokapotPsms(NodeType):
     filename = "mokapot.psms.txt"
+
+
+class MokapotFdrLevels(NodeType):
+    filename = "mokapot.fdr_levels.tsv"
 
 
 class ConfidentPsmsParquet(NodeType):
@@ -1286,6 +1295,21 @@ def plot_peptide_length_histogram(dumped_peptides: DumpedPeptides):
     return histogram
 
 
+def _fdr_levels_record_flags(args: CommandArgs, tool_command: str) -> str:
+    """`--node-dir`/`--command`/`--parent` flags of `sage-fdr-levels`/`mokapot-fdr-levels`:
+    what the run database records about this node."""
+    parents = []
+    for value in args.inputs.values():
+        if isinstance(value, tuple):
+            parents.extend(value)
+        elif value is not None:
+            parents.append(value)
+    return (
+        f" --node-dir {shlex.quote(str(args.workdir))} --command {shlex.quote(tool_command)}"
+        + "".join(f" --parent {shlex.quote(str(p))}" for p in parents)
+    )
+
+
 def _run_sage_command(args: CommandArgs) -> str:
     """Python command callback, not a static template -- lets
     `--predicted-rt`/`--predicted-iim` be added independently, purely by
@@ -1314,6 +1338,7 @@ def _run_sage_command(args: CommandArgs) -> str:
     results_pin = shlex.quote(str(args.outputs.results_pin))
     results_tsv = shlex.quote(str(args.outputs.results_tsv))
     matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
+    fdr_levels = shlex.quote(str(args.outputs.fdr_levels))
 
     flags = f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
     if args.inputs.predicted_rt is not None:
@@ -1335,12 +1360,17 @@ def _run_sage_command(args: CommandArgs) -> str:
             f" --predicted-fragment-intensity-cache {frag_cache}"
         )
 
-    return (
-        f"{sage_binary} --version && {sage_binary} -f {fasta}"
+    sage = (
+        f"{sage_binary} -f {fasta}"
         f" --annotate-matches --write-pin --output_directory {workdir}"
         f" --pmsms {pmsms} --precursors {precursors}{flags} {sage_config}"
+    )
+    return (
+        f"{sage_binary} --version && {sage}"
         f" && test -f {results_json} && test -f {results_pin}"
         f" && test -f {results_tsv} && test -f {matched_fragments}"
+        f" && venvs/common/bin/sage-fdr-levels {results_tsv} {fdr_levels}"
+        f"{_fdr_levels_record_flags(args, sage)}"
     )
 
 
@@ -1385,12 +1415,16 @@ def run_sage(
     RecalibratedTof2MzTable and `precursors` carry `fragment_shift_ppm`
     (FragmentShiftedPrecursors, or a table derived from it), which Sage applies
     whenever the column is present. See plans/fragment_mz_corrected_tof2mz_table.md.
+
+    `fdr_levels` holds the confident spectra, peptidoforms and ions at 1% FDR
+    (`sage-fdr-levels`), which also records the run in `$ION_MAIDEN_REGRESSION_DB`.
     """
     results_json = output(SageResultsJson)
     results_pin = output(SageResultsPin)
     results_tsv = output(SageResultsTsv)
     matched_fragments = output(SageMatchedFragments)
-    return results_json, results_pin, results_tsv, matched_fragments
+    fdr_levels = output(SageFdrLevels)
+    return results_json, results_pin, results_tsv, matched_fragments, fdr_levels
 
 
 @text_file
@@ -1685,11 +1719,20 @@ def _mokapot_command(args: CommandArgs) -> str:
     `random_state` (`--xgboost_seed`/`--lightgbm_seed`, reusing the same
     integer). Verified end-to-end: two real runs with the same seed
     produced byte-identical output files.
+
+    `--keep_decoys` also writes `mokapot.decoy.psms.txt` and
+    `mokapot.decoy.peptides.txt` into the workdir, next to the target
+    tables. The last step, `mokapot-fdr-levels`, counts confident spectra,
+    peptidoforms and ions from them (ions take their charge from
+    `sage_results_tsv`) and records the run in `$ION_MAIDEN_REGRESSION_DB`.
     """
     pin = shlex.quote(str(args.inputs.pin))
     used_pin = shlex.quote(str(args.outputs.used_pin))
     peptides = shlex.quote(str(args.outputs.peptides))
     psms = shlex.quote(str(args.outputs.psms))
+    fdr_levels = shlex.quote(str(args.outputs.fdr_levels))
+    decoy_psms = shlex.quote(str(Path(args.workdir) / "mokapot.decoy.psms.txt"))
+    sage_results_tsv = shlex.quote(str(args.inputs.sage_results_tsv))
     workdir = shlex.quote(str(args.workdir))
     plugin_flag = f" --plugin {args.config.plugin}" if args.config.plugin else ""
 
@@ -1718,20 +1761,25 @@ def _mokapot_command(args: CommandArgs) -> str:
         rt_source = shlex.quote(args.config.rt_source or "none")
         iim_source = shlex.quote(args.config.iim_source or "none")
         adapter_flags = f" --mode sage --rt-source {rt_source} --iim-source {iim_source}"
-    return (
+    mokapot = (
         f"venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {pin} -o {used_pin}"
         f"{adapter_flags}"
         f" && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
         f" --train_fdr {args.config.train_fdr} --test_fdr {args.config.test_fdr}"
-        f" --max_workers {max_workers} --seed {args.config.seed}"
+        f" --max_workers {max_workers} --seed {args.config.seed} --keep_decoys"
         f"{plugin_flag}{plugin_flags}"
-        f" && test -f {peptides} && test -f {psms}"
+    )
+    return (
+        f"{mokapot} && test -f {peptides} && test -f {psms} && test -f {decoy_psms}"
+        f" && venvs/common/bin/mokapot-fdr-levels {psms} {peptides} {decoy_psms}"
+        f" {sage_results_tsv} {fdr_levels}{_fdr_levels_record_flags(args, mokapot)}"
     )
 
 
 @command(_mokapot_command, threads=CORES)
 def mokapot(
     pin: Pin,
+    sage_results_tsv: SageResultsTsv,
     train_fdr: float = 0.05,
     test_fdr: float = 0.01,
     plugin: str | None = None,
@@ -1745,7 +1793,8 @@ def mokapot(
     used_pin = output(MokapotUsedPin)
     peptides = output(MokapotPeptides)
     psms = output(MokapotPsms)
-    return used_pin, peptides, psms
+    fdr_levels = output(MokapotFdrLevels)
+    return used_pin, peptides, psms, fdr_levels
 
 
 @command("venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}")
@@ -2252,6 +2301,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.filtered_sage_results_pin,
                 P.filtered_sage_results_tsv,
                 P.filtered_sage_matched_fragments,
+                P.filtered_sage_fdr_levels,
             ) = run_sage(
                 recalibration_spectra,
                 recalibration_search_precursors,
@@ -2457,6 +2507,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_results_pin,
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
+                P.sage_fdr_levels,
             ) = run_sage(
                 P.search_pmsms,
                 current_precursors,
@@ -2486,6 +2537,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_results_pin,
                 P.sage_results_tsv,
                 P.sage_matched_fragments,
+                P.sage_fdr_levels,
             ) = run_sage(
                 P.search_pmsms,
                 P.search_precursors,
@@ -2513,8 +2565,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         # `[mokapot].plugin` (optional, e.g. `plugin = "xgboost"`) --
         # config-driven so a job can pick mokapot's own default (linear SVM)
         # or xgboost.
-        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms = mokapot(
+        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms, P.mokapot_fdr_levels = mokapot(
             P.sage_results_pin,
+            P.sage_results_tsv,
             # "" (not None) when unset -- necroflow's dependency-provenance
             # recording can't serialize a bare `None` scalar kwarg value to
             # TOML; "" is falsy in `_mokapot_command`'s own `if

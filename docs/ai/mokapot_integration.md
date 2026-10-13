@@ -66,6 +66,24 @@ Both land inside the day's established noise band -- consistent with the
 `scripts/run_mokapot.py`-era numbers below, confirming the rewrite changed
 nothing about model behavior, only where the code lives.
 
+## `--keep_decoys` (2026-10-13)
+
+`_mokapot_command` passes `--keep_decoys`, so every mokapot node also holds
+`mokapot.decoy.psms.txt` and `mokapot.decoy.peptides.txt` (about 26MB on
+F9477). Ion-level FDR needs the decoy PSMs: `searchops.ion_level_fdr.
+mokapot_ion_level_ids` (git/searchops `docs/ai/ion_level_fdr.md`). They are
+not declared outputs; they sit in the node directory next to the target tables.
+
+Editing the command callback changed every mokapot node's hash (necroflow
+keeps the callback's AST in node identity), so each mokapot node reruns once
+into a new directory; nothing upstream reruns. Checked on
+`jobs/f9477_marginal_cosine.toml`: 45.3s, and `mokapot.psms.txt` and
+`mokapot.peptides.txt` are byte-identical to the previous node's.
+
+The same day the rule gained `sage_results_tsv` as a second input and a last
+step, `mokapot-fdr-levels`, which counts spectra, peptidoforms and ions from
+those tables and records the run: `docs/ai/fdr_levels.md`.
+
 ## Model persistence, `[mokapot].model` choice, and GPU (2026-09-17)
 
 **Superseded by the section above, same day** -- kept here as the record of
@@ -337,7 +355,7 @@ with zero new packaging.
 hardcoded `results.to_txt(dest_dir=..., decoys=True)`, copied from
 `sagepy_rescore/mokapot_runner.py`'s pattern without checking against the
 real CLI. The CLI actually does `to_txt(decoys=config.keep_decoys)`, and
-`--keep_decoys` defaults `False` (never passed by this pipeline) --
+`--keep_decoys` defaults `False` (not passed by this pipeline then) --
 `decoys=True` silently added two extra files
 (`mokapot.decoy.{peptides,psms}.txt`, ~26MB) that neither prior CLI-based
 node output nor the declared `MokapotPeptides`/`MokapotPsms` node types
