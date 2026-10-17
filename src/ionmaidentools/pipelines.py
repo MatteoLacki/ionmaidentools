@@ -248,6 +248,14 @@ class DumpedPeptides(NodeType):
     filename = "peptides.parquet"
 
 
+class CompactPeptidesTable(MmappetDataset):
+    """`dump_peptides --compact`'s peptide table: the rows as mmappet columns plus
+    `mass_chunks.bin`, `wide_masses.bin` and `meta.json` sidecars, read in place by
+    `sage --compact-peptides` (sliced search only)."""
+
+    filename = "compact_peptides.mmappet"
+
+
 class DumpFragmentIndexBinary(NodeType):
     filename = "dump_fragment_index"
 
@@ -478,36 +486,36 @@ class RecalibratedPpmPlot(Png):
     filename = "recalibrated_ppm.png"
 
 
-class PredictedRt(NodeType):
-    """sequence -> rt parquet from `git/featureprediction`'s `predict_rt`
-    -- the `--predicted-rt` cache SAGE1 needs to look up a candidate's
-    predicted RT during search (it can't derive this itself). Independent
-    of `PredictedIim` -- see plans/rt_iim_independent_dimensions.md
+class PredictedRt(MmappetDataset):
+    """Positional `rt` (float64, one row per `dumped_peptides` row, `meta.json`
+    carrying `dumped_peptides_sha256`) from `git/featureprediction`'s
+    `predict_rt` -- the `--predicted-rt` input SAGE1 maps to look up a
+    candidate's predicted RT during search (it can't derive this itself).
+    Independent of `PredictedIim` -- see plans/rt_iim_independent_dimensions.md
     (original combined design: plans/better_sage_filtering.md's B.4/B.5)."""
 
-    filename = "predicted_rt.parquet"
+    filename = "predicted_rt.mmappet"
 
 
-class PredictedIim(NodeType):
-    """sequence,charge -> iim parquet from `git/featureprediction`'s
-    `predict_iim` -- the `--predicted-iim` cache. Independent of
-    `PredictedRt`."""
+class PredictedIim(MmappetDataset):
+    """Positional `iim` (float64, dense over `dumped_peptides` row x charge) from
+    `git/featureprediction`'s `predict_iim` -- the `--predicted-iim` input.
+    Independent of `PredictedRt`."""
 
-    filename = "predicted_iim.parquet"
+    filename = "predicted_iim.mmappet"
 
 
-class FragmentIntensityForSage(NodeType):
+class FragmentIntensityForSage(MmappetDataset):
     """Job-scoped *index* from `git/featureprediction`'s
-    `export_fragment_intensity_for_sage` -- `sequence, charge, start, end`
-    pointers (not a copy of the sparse payload) for exactly this job's
+    `export_fragment_intensity_for_sage` -- `start, end` pointers (int64, -1
+    for no entry; not a copy of the sparse payload) dense over this job's
     `dumped_peptides` x charge range, resolved against the (much bigger,
-    shared, ever-growing) fragment-intensity cache under `[caches] root`. A future SAGE reader
-    keeps that cache's `arrays.mmappet` mmapped and uses this file only to
-    look up which `[start, end)` range belongs to which `(sequence,
-    charge)` -- see `git/featureprediction`'s AI.md. Not yet consumed by
-    SAGE itself."""
+    shared, ever-growing) fragment-intensity cache under `[caches] root`. SAGE
+    maps it and that cache's `arrays.mmappet`, and uses this index to find the
+    `[start, end)` range of each `(peptide_row, charge)` -- see
+    `git/featureprediction`'s AI.md."""
 
-    filename = "fragment_intensity_for_sage.parquet"
+    filename = "fragment_intensity_for_sage.mmappet"
 
 
 class NoPrediction(NodeType):
@@ -1124,6 +1132,18 @@ def dump_peptides(
     return peptides
 
 
+@command(
+    "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} --compact {compact_peptides}",
+    threads=CORES)
+def dump_compact_peptides(
+    fasta: Fasta,
+    dump_peptides_config: DumpPeptidesConfig,
+    dump_peptides_binary: DumpPeptidesBinary,
+):
+    compact_peptides = output(CompactPeptidesTable)
+    return compact_peptides
+
+
 # Duplicated from `git/featureprediction`'s `fragment_intensity` module --
 # can't import across venvs (same reasoning as `_DEFAULT_KOINA_*_SERVER_URL`
 # above). Not yet exposed as job config: no real job has needed a different
@@ -1341,6 +1361,8 @@ def _run_sage_command(args: CommandArgs) -> str:
     fdr_levels = shlex.quote(str(args.outputs.fdr_levels))
 
     flags = f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
+    if args.inputs.compact_peptides is not None:
+        flags += f" --compact-peptides {shlex.quote(str(args.inputs.compact_peptides))}"
     if args.inputs.predicted_rt is not None:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
     if args.inputs.predicted_iim is not None:
@@ -1386,6 +1408,7 @@ def run_sage(
     predicted_iim: PredictedIim | None = None,
     predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
     fragment_intensity_cache_path: str = "",
+    compact_peptides: CompactPeptidesTable | None = None,
 ):
     """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
     Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
@@ -2193,6 +2216,12 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.dumped_peptides = dump_peptides(
             P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
+        # The sliced search reads its peptide table from this node instead of
+        # building it on every run.
+        P.compact_peptides = dump_compact_peptides(
+            P.fasta, P.dump_peptides_config, P.dump_peptides_binary
+        )
+        _compact_peptides = P.compact_peptides if database.get("sliced", False) else None
 
         # Shared prediction caches, addressed by path rather than produced by
         # a rule -- see `_DEFAULT_CACHE_ROOT` for why they sit outside `nodes/`.
@@ -2309,6 +2338,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_config,
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
+                compact_peptides=_compact_peptides,
             )
             P.recalibration_config = write_recalibration_config(
                 text=tomlkit.dumps(cfg.recalibration)
@@ -2519,6 +2549,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 predicted_iim=P.predicted_iim,
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
                 fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
+                compact_peptides=_compact_peptides,
             )
 
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
@@ -2547,6 +2578,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 tof2mz=P.tof2mz_table,
                 predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
                 fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
+                compact_peptides=_compact_peptides,
             )
 
         P.confident_psms = filter_sage_results(P.sage_results_tsv, fdr=cfg.sage_summarize.fdr)
