@@ -10,6 +10,17 @@ current-best config to point people (or agents) at, instead of having to
 dig through `docs/ai/mokapot_integration.md`'s ablation table history to
 figure out which combination currently wins.
 
+## Config change 2026-10-20: `merge_fragment_windows = true` (numbers pending)
+
+`[sage] merge_fragment_windows = true` (git/sage `docs/ai/merged_fragment_windows.md`): the
+prescore counts each fragment once however many peaks lie within tolerance of it. Enabled at the
+user's request for correct counting, not for a higher ion count. The job's final SAGE and mokapot,
+rerun by hand on the 2026-10-15 nodes' inputs with one binary (necromerge2
+`temp/peptide_views/merge/best/`): SAGE 1% 94,053 / 20,705 / 22,717 -> 95,216 / 21,046 / 23,031
+(spectra / peptidoforms / ions), mokapot 121,372 / 29,120 / 31,778 -> 122,144 / 28,884 / 31,680,
+within mokapot's noise. The "Current best" numbers below predate it; a full pipeline run (after
+rebuilding `git/sage/target/release`, whose Oct 16 binary ignores the key) should replace them.
+
 ## Current best (as of 2026-10-07)
 
 Same config as below plus mkpmsms `"ms2-peak-picker" = "local_max_intensity"` (was
