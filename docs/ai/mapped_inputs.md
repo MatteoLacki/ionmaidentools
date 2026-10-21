@@ -13,8 +13,11 @@ digest setting, shared by every job and both SAGE passes. Output
 `wide_masses.bin`, `meta.json`).
 
 `run_sage` takes it as an optional input (`compact_peptides`, `--compact-peptides`),
-passed only when `cfg.sage.database.sliced` is true: the monolithic search builds
-its own index and does not read the table. The workflow declares the node for
+passed only when SAGE runs its sliced search (`_sage_searches_sliced`): when
+`cfg.sage.database.sliced` is true, or, since 2026-10-21, when it is unset and none of
+`database.prefilter`, `wide_window` and `chimera` is set, mirroring SAGE's own default
+(git/sage `docs/ai/sliced_search.md`). The monolithic search builds its own index and
+does not read the table. The workflow declares the node for
 every job; necroflow runs it only for jobs whose `run_sage` asks for it.
 
 It is a separate node from `dump_peptides` on purpose: `peptides.parquet` still

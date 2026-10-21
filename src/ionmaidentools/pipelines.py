@@ -1188,6 +1188,21 @@ _KOINA_RT_MODEL = "Chronologer_RT"
 _KOINA_IIM_MODEL = "IM2Deep"
 
 
+def _sage_searches_sliced(sage) -> bool:
+    """Whether SAGE runs its sliced search for this `[sage]` config: `database.sliced`
+    when set, else unless `database.prefilter`, `wide_window` or `chimera` is set (the
+    rule of `Input::build`, git/sage `crates/sage-cli/src/input.rs`)."""
+    database = sage.get("database", {})
+    if "sliced" in database:
+        return bool(database["sliced"])
+    monolithic_only = (
+        database.get("prefilter", False),
+        sage.get("wide_window", False),
+        sage.get("chimera", False),
+    )
+    return not any(monolithic_only)
+
+
 def _cache_root() -> Path:
     """The shared prediction-cache root (see `_CACHE_ROOT`)."""
     return Path(_CACHE_ROOT)
@@ -2221,7 +2236,7 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.compact_peptides = dump_compact_peptides(
             P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
-        _compact_peptides = P.compact_peptides if database.get("sliced", False) else None
+        _compact_peptides = P.compact_peptides if _sage_searches_sliced(cfg.sage) else None
 
         # Shared prediction caches, addressed by path rather than produced by
         # a rule -- see `_DEFAULT_CACHE_ROOT` for why they sit outside `nodes/`.
