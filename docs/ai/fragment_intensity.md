@@ -1,5 +1,13 @@
 # Fragment-intensity prediction cache
 
+**Removed from the pipeline 2026-10-26** (necromerge2 `plans/speclib_only.md`):
+`export_fragment_intensity_for_sage`, `FragmentIntensityForSage` and the
+`[fragment_intensity]` switch are gone; a job gets predicted fragment intensities only
+from a SPECLIB (`[speclib] path = ...`, `check_speclib`, `run_sage(speclib=...)`), and
+`[fragment_intensity]` in a job is an error. `git/featureprediction`'s
+`feature-prediction-make-speclib` converts a filled cache into one. The rest of this file
+is the history of the cache wiring.
+
 ## This repo's first `mutable=True` rule (2026-08-31)
 
 `predict_fragment_intensity` wraps `git/featureprediction`'s

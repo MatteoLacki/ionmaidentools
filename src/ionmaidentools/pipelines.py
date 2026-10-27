@@ -14,7 +14,6 @@ import json
 import os
 import shlex
 from pathlib import Path
-from typing import NamedTuple
 
 import tomlkit
 
@@ -238,12 +237,6 @@ class DumpPeptidesConfig(NodeType):
     filename = "dump_peptides_config.json"
 
 
-class FragmentIndexConfig(NodeType):
-    """`DumpPeptidesConfig` plus `min_ion_index`, for `bin_fragment_index`."""
-
-    filename = "fragment_index_config.json"
-
-
 class DumpedPeptides(NodeType):
     filename = "peptides.parquet"
 
@@ -254,33 +247,6 @@ class CompactPeptidesTable(MmappetDataset):
     `sage --compact-peptides` (sliced search only)."""
 
     filename = "compact_peptides.mmappet"
-
-
-class DumpFragmentIndexBinary(NodeType):
-    filename = "dump_fragment_index"
-
-
-class MassGrid(MmappetDataset):
-    """Precursor x fragment mass occupancy counts, in the flat-column mmappet
-    layout (`schema.txt` + `0.bin` + `shape.txt`) with a `grid.json` sidecar
-    carrying bin parameters and axis labels -- see necromerge2's
-    `scripts/mass_grid.py`."""
-
-    filename = "mass_grid.mmappet"
-
-
-class FragmentIndexGrid(MassGrid):
-    """`MassGrid` of SAGE's own fragment index: peptide monoisotopic mass x
-    fragment neutral mass."""
-
-    filename = "fragment_index_grid.mmappet"
-
-
-class PredictedFragmentGrid(MassGrid):
-    """`MassGrid` of Koina-predicted fragments: precursor m/z (all charges
-    pooled) x predicted fragment m/z."""
-
-    filename = "predicted_fragment_grid.mmappet"
 
 
 class MokapotUsedPin(NodeType):
@@ -337,76 +303,6 @@ class TarGz(NodeType):
 
 class Png(NodeType):
     filename = "plot.png"
-
-
-class MassGridHeatmap(Png):
-    filename = "mass_grid_heatmap.png"
-
-
-class PeptideLengthHistogram(Png):
-    filename = "peptide_length_histogram.png"
-
-
-class FragpipeWorkflow(NodeType):
-    """A hand-maintained FragPipe `.workflow` file -- treated as a data file
-    like Fasta/BrukerD, symlinked in as-is. Never generated or patched by
-    the pipeline (unlike Sage's JSON config)."""
-
-    filename = "fragpipe_workflow.workflow"
-
-
-class FragpipeManifest(NodeType):
-    filename = "fragpipe_manifest.tsv"
-
-
-class FragpipeResultsDir(NodeType):
-    filename = "fragpipe_results"
-
-
-class FragpipeLog(NodeType):
-    filename = "fragpipe_full_log.txt"
-
-
-class FragpipeSummary(NodeType):
-    filename = "fragpipe_summary.txt"
-
-
-class FragpipeDecoyFasta(NodeType):
-    """Target+decoy FASTA via FragPipe's own Philosopher tool (`database
-    --custom ... --prefix rev_`) -- unlike Sage, FragPipe/Philosopher has no
-    generate-decoys-at-search-time option, so the database must already
-    contain them. Standalone output, not wired into `run_fragpipe`: the
-    `.workflow` file stays a plain, hand-maintained data file (see
-    `FragpipeWorkflow`), so pointing `database.db-path=` at this file is the
-    user's responsibility, same as everything else in that file."""
-
-    filename = "decoy_database.fas"
-
-
-class SyntheticPmsms(Pmsms):
-    """Fragment ions for peptides simulated from a FASTA (Koina-predicted, no
-    real acquisition) -- see scripts/simulate_peptides_to_pmsms.py. mz is
-    baked in directly, with no `tof` (unlike real pmsms, whose m/z every
-    consumer reads through a Tof2MzTable)."""
-
-    filename = "synthetic_pmsms.mmappet"
-
-
-class SyntheticPrecursors(MmappetDataset):
-    filename = "synthetic_precursors.mmappet"
-
-
-class SyntheticMzml(TofFilteredMzml):
-    """Accepted wherever TofFilteredMzml is, e.g. write_fragpipe_manifest's
-    mzml input -- same file shape, different (simulated) origin."""
-
-
-class SyntheticMzmlIdmap(TofFilteredMzmlIdmap):
-    pass
-
-
-class SyntheticMgf(Mgf):
-    pass
 
 
 class SageSummary(NodeType):
@@ -505,17 +401,15 @@ class PredictedIim(MmappetDataset):
     filename = "predicted_iim.mmappet"
 
 
-class FragmentIntensityForSage(MmappetDataset):
-    """Job-scoped *index* from `git/featureprediction`'s
-    `export_fragment_intensity_for_sage` -- `start, end` pointers (int64, -1
-    for no entry; not a copy of the sparse payload) dense over this job's
-    `dumped_peptides` x charge range, resolved against the (much bigger,
-    shared, ever-growing) fragment-intensity cache under `[caches] root`. SAGE
-    maps it and that cache's `arrays.mmappet`, and uses this index to find the
-    `[start, end)` range of each `(peptide_row, charge)` -- see
-    `git/featureprediction`'s AI.md."""
+class Speclib(NodeType):
+    """A user-provided SPECLIB: the predicted fragment intensities of one peptide
+    table (`index.mmappet` + `arrays.mmappet` + `manifest.json`, see
+    `git/featureprediction`'s `docs/ai/speclib.md`), symlinked in by `check_speclib`
+    once it has been checked against this job's `dumped_peptides` and precursor
+    charges. SAGE maps its two datasets in place; the arrays' `meta.json` declares
+    their intensity encoding."""
 
-    filename = "fragment_intensity_for_sage.mmappet"
+    filename = "speclib"
 
 
 class NoPrediction(NodeType):
@@ -647,12 +541,6 @@ def source_dump_peptides_binary(path: str):
     return dump_peptides_binary
 
 
-@symlink_file
-def source_dump_fragment_index_binary(path: str):
-    dump_fragment_index_binary = output(DumpFragmentIndexBinary)
-    return dump_fragment_index_binary
-
-
 # Symlinked so edits to the installed-editable module invalidate sage_summarize.
 @symlink_file
 def source_sage_summarize_module(path: str):
@@ -729,7 +617,10 @@ def write_scale_estimation_config(text: str):
     return config
 
 
-@command("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}", threads=CORES)
+@command(
+    "venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}",
+    threads=CORES,
+)
 def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
     argmaxes = output(ArgmaxSample)
     stats = output(ArgmaxSieveStats)
@@ -737,9 +628,9 @@ def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
 
 
 @command(
-    "venvs/common/bin/ms1_extract_sample_tensors {ms1} {argmaxes} {config} {tensors}"
-,
-    threads=CORES)
+    "venvs/common/bin/ms1_extract_sample_tensors {ms1} {argmaxes} {config} {tensors}",
+    threads=CORES,
+)
 def extract_ms1_sample_tensors(
     ms1: Ms1Events, argmaxes: ArgmaxSample, config: ScaleEstimationConfig
 ):
@@ -748,9 +639,9 @@ def extract_ms1_sample_tensors(
 
 
 @command(
-    "venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {stats} {tensors} {config} {scales}"
-,
-    threads=CORES)
+    "venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {stats} {tensors} {config} {scales}",
+    threads=CORES,
+)
 def fit_ms1_scale_estimates(
     argmaxes: ArgmaxSample,
     stats: ArgmaxSieveStats,
@@ -774,9 +665,9 @@ def write_precursor_candidate_selection_config(text: str):
 
 
 @command(
-    "venvs/common/bin/ms1_count_candidate_neighbors {ms1} {scale_estimates} {config} {features}"
-,
-    threads=CORES)
+    "venvs/common/bin/ms1_count_candidate_neighbors {ms1} {scale_estimates} {config} {features}",
+    threads=CORES,
+)
 def count_candidate_neighbors(
     ms1: Ms1Events,
     scale_estimates: ScaleEstimates,
@@ -787,9 +678,9 @@ def count_candidate_neighbors(
 
 
 @command(
-    "venvs/common/bin/ms1_score_candidates {ms1} {scale_estimates} {features} {config} {clusters}"
-,
-    threads=CORES)
+    "venvs/common/bin/ms1_score_candidates {ms1} {scale_estimates} {features} {config} {clusters}",
+    threads=CORES,
+)
 def score_candidates(
     ms1: Ms1Events,
     scale_estimates: ScaleEstimates,
@@ -813,9 +704,9 @@ def write_postprocessing_config(text: str):
 
 
 @command(
-    "venvs/common/bin/ms1_annotate_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {annotated}"
-,
-    threads=CORES)
+    "venvs/common/bin/ms1_annotate_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {annotated}",
+    threads=CORES,
+)
 def annotate_precursor_clusters(
     tdf: BrukerD,
     ms1: Ms1Events,
@@ -828,9 +719,9 @@ def annotate_precursor_clusters(
 
 
 @command(
-    "venvs/common/bin/ms1_decharge_candidates {tdf} {ms1} {annotated} {config} {clusters}"
-,
-    threads=CORES)
+    "venvs/common/bin/ms1_decharge_candidates {tdf} {ms1} {annotated} {config} {clusters}",
+    threads=CORES,
+)
 def decharge_precursor_clusters(
     tdf: BrukerD,
     ms1: Ms1Events,
@@ -850,9 +741,9 @@ def write_precursor_transmission_config(text: str):
 @command(
     "venvs/common/bin/transmit_precursors {tdf} {clusters} {config} {transpec}"
     " --output-precursors {precursors} --verbose"
-    " && test -f {transpec}/schema.txt"
-,
-    threads=CORES)
+    " && test -f {transpec}/schema.txt",
+    threads=CORES,
+)
 def transmit_precursors_into_fragment_space(
     tdf: BrukerD,
     clusters: PostprocessedPrecursorClusters,
@@ -864,9 +755,9 @@ def transmit_precursors_into_fragment_space(
 
 
 @command(
-    "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
-,
-    threads=CORES)
+    "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}",
+    threads=CORES,
+)
 def filter_first_precursors(precursors: TransmittedPrecursorClusters, filter: str):
     filtered = output(FirstFilterPrecursors)
     return filtered
@@ -904,18 +795,18 @@ def run_mkpmsms_binary(
 
 
 @command(
-    "venvs/common/bin/cut_and_index_precursors {filter_mm} {pmsms}/dataindex.mmappet {precursors}"
-,
-    threads=CORES)
+    "venvs/common/bin/cut_and_index_precursors {filter_mm} {pmsms}/dataindex.mmappet {precursors}",
+    threads=CORES,
+)
 def cut_and_index_precursors(filter_mm: FirstFilterPrecursors, pmsms: Pmsms):
     precursors = output(Ms2IndexedPrecursors)
     return precursors
 
 
 @command(
-    "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
-,
-    threads=CORES)
+    "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}",
+    threads=CORES,
+)
 def filter_pre_sage_precursors(precursors: Ms2IndexedPrecursors, filter: str):
     filtered = output(PreSageFilteredPrecursors)
     return filtered
@@ -1011,9 +902,9 @@ def write_recalibration_precursor_selection_config(text: str):
 
 @command(
     "venvs/common/bin/python -m timstofu.cli.select_recalibration_precursors"
-    " {precursors} {config} {selected}"
-,
-    threads=CORES)
+    " {precursors} {config} {selected}",
+    threads=CORES,
+)
 def select_recalibration_precursors(
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationPrecursorSelectionConfig,
@@ -1050,9 +941,9 @@ def recalibrate_pmsms_mz(
 
 @command(
     "venvs/common/bin/recalibrate-precursors {sage_results_tsv} {precursors}"
-    " {output_precursors} {tolerance} {plot} {model} --config {config} --fdr {fdr}"
-,
-    threads=CORES)
+    " {output_precursors} {tolerance} {plot} {model} --config {config} --fdr {fdr}",
+    threads=CORES,
+)
 def recalibrate_precursors(
     sage_results_tsv: SageResultsTsv,
     precursors: PreSageFilteredPrecursors,
@@ -1113,16 +1004,10 @@ def write_dump_peptides_config(text: str):
     return dump_peptides_config
 
 
-@text_file
-def write_fragment_index_config(text: str):
-    fragment_index_config = output(FragmentIndexConfig)
-    return fragment_index_config
-
-
 @command(
-    "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} -o {peptides}"
-,
-    threads=CORES)
+    "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} -o {peptides}",
+    threads=CORES,
+)
 def dump_peptides(
     fasta: Fasta,
     dump_peptides_config: DumpPeptidesConfig,
@@ -1134,7 +1019,8 @@ def dump_peptides(
 
 @command(
     "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} --compact {compact_peptides}",
-    threads=CORES)
+    threads=CORES,
+)
 def dump_compact_peptides(
     fasta: Fasta,
     dump_peptides_config: DumpPeptidesConfig,
@@ -1144,29 +1030,13 @@ def dump_compact_peptides(
     return compact_peptides
 
 
-# Duplicated from `git/featureprediction`'s `fragment_intensity` module --
-# can't import across venvs (same reasoning as `_DEFAULT_KOINA_*_SERVER_URL`
-# above). Not yet exposed as job config: no real job has needed a different
-# value, and `DEFAULT_COLLISION_ENERGY` is already documented as a
-# placeholder, not a measured value -- see that repo's AI.md.
-_DEFAULT_FRAGMENT_COLLISION_ENERGY = 30.0
-_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE = "HCD"
-
-# Prediction caches (RT/IIM/fragment-intensity) live *outside* `nodes/`,
+# Prediction caches (RT/IIM) live *outside* `nodes/`,
 # addressed by a plain path parameter rather than produced by a rule.
 #
 # They are semantically neutral by construction: every consumer does
 # lookup-before-append against a deterministic key, so a cold cache and a warm
 # one yield byte-identical output and differ only in how many Koina calls get
 # made. That invariant is what licenses keeping them out of node identity.
-#
-# Until 2026-09-16 they were `mutable=True` single-output nodes. `mutable=True`
-# stops a cache's *bytes* from staling consumers, but the cache directory was
-# still `nodes/<rule>/<hash>/`, so any change to the job's `dumped_peptides`
-# hash -- including edits that provably cannot affect the cache, such as
-# `bucket_size` -- produced a fresh empty directory and discarded the fill.
-# On F9477 that cost 2711s of fragment-intensity refill plus 315s of RT refill
-# out of a 3474s run. See AI.md, "Prediction caches".
 #
 # A fixed working-directory-relative path, never a job-config value and never read
 # from the environment here. `mscaches` is a Makefile-managed symlink, the same
@@ -1181,9 +1051,7 @@ _CACHE_ROOT = "mscaches"
 # Duplicated from `git/featureprediction`'s `koina_client` -- can't import
 # across venvs (same reasoning as `_DEFAULT_KOINA_*_SERVER_URL` below). Used
 # only to name cache directories, keyed by what the cache's own key does *not*
-# cover; `feature_prediction.fragment_intensity.open_or_create_cache`
-# independently refuses a cache whose recorded `model_names` disagrees.
-_KOINA_INTENSITY_MODEL = "Prosit_2024_intensity_PTMs_gl_compact_trt"
+# cover.
 _KOINA_RT_MODEL = "Chronologer_RT"
 _KOINA_IIM_MODEL = "IM2Deep"
 
@@ -1209,125 +1077,21 @@ def _cache_root() -> Path:
 
 
 @command(
-    "venvs/featureprediction/bin/feature-prediction-generate-fragments"
-    " {dumped_peptides} {fragment_intensity_cache_path}"
-    " --min-charge {min_charge} --max-charge {max_charge}"
-    " --collision-energy {collision_energy} --fragmentation-type {fragmentation_type}"
-    " && venvs/featureprediction/bin/feature-prediction-export-fragments-for-sage"
-    " {dumped_peptides} {fragment_intensity_cache_path} {fragment_intensity_for_sage}"
-    " --min-charge {min_charge} --max-charge {max_charge} --collision-energy {collision_energy}"
-,
-    threads=CORES)
-def export_fragment_intensity_for_sage(
-    dumped_peptides: DumpedPeptides,
-    fragment_intensity_cache_path: str,
-    min_charge: int,
-    max_charge: int,
-    collision_energy: float,
-    fragmentation_type: str,
-):
-    """Fill the shared fragment-intensity cache at `fragment_intensity_cache_path`
-    for this job's `dumped_peptides` x `[min_charge, max_charge]`, then scope it
-    down to a job-local pointer index via `git/featureprediction`'s DuckDB-based
-    export -- see that repo's AI.md, "`export_fragment_intensity.py`".
-
-    Fill and export are one rule, two commands, because `export_fragment_intensity.py`
-    is strictly read-only: a key absent from the cache silently exports `-1`
-    sentinels rather than erroring, so something must guarantee the fill ran
-    first. Splitting them would mean a separate rule whose only output is the
-    cache -- which is exactly the node-scoped-cache arrangement this replaced
-    (see `_DEFAULT_CACHE_ROOT`). Safe as one node precisely because the cache
-    lives outside the workdir: if the export half fails, the fill's appends
-    survive, and the retry re-looks-up instead of re-calling Koina.
-
-    Independently requestable (like `ms2_tsf_events`/`ms2_tfs_events`) -- no
-    downstream consumer in the DAG unless `[fragment_intensity]` is present in
-    the job config, and the fill half is a real, expensive, network-bound
-    operation (a full human-proteome fill took ~43 minutes against the live
-    Koina server), so this must never run just because `dumped_peptides` exists.
-    """
-    fragment_intensity_for_sage = output(FragmentIntensityForSage)
-    return fragment_intensity_for_sage
-
-
-class MassGridVariant(NamedTuple):
-    """One binning + rendering of a `MassGrid`. `binning` is the CLI flag
-    stem both grid builders share: `ppm` (geometric) or `bin-da` (linear)."""
-
-    binning: str
-    bin_width: float
-    color_scale: str
-    vmax_percentile: float
-
-
-MASS_GRID_VARIANTS = {
-    "5ppm": MassGridVariant("ppm", 5.0, "log", 100.0),
-    "10da": MassGridVariant("bin-da", 10.0, "linear", 99.0),
-}
-MASS_GRID_TARGET_PIXELS = 8192
-
-
-@command(
-    "{dump_fragment_index_binary} -f {fasta} -c {fragment_index_config} -o {grid}"
-    " --{binning} {bin_width} --target-pixels {target_pixels}"
-,
-    threads=CORES)
-def bin_fragment_index(
-    fasta: Fasta,
-    fragment_index_config: FragmentIndexConfig,
-    dump_fragment_index_binary: DumpFragmentIndexBinary,
-    binning: str,
-    bin_width: float,
-    target_pixels: int,
-):
-    """Build SAGE's fragment index for `fasta` and histogram its target
-    (peptide mass, fragment mass) pairs into a `FragmentIndexGrid`.
-    Independently requestable; nothing in the search consumes it."""
-    grid = output(FragmentIndexGrid)
-    return grid
-
-
-@command(
-    "venvs/featureprediction/bin/python scripts/predicted_fragment_grid.py"
-    " {dumped_peptides} {fragment_intensity_for_sage} {fragment_intensity_cache_path} {grid}"
-    " --min-charge {min_charge} --max-charge {max_charge}"
-    " --{binning} {bin_width} --target-pixels {target_pixels}"
+    "venvs/featureprediction/bin/feature-prediction-check-speclib"
+    " {dumped_peptides} {path} --min-charge {min_charge} --max-charge {max_charge}"
+    " && ln -s $(realpath {path}) {speclib}"
 )
-def bin_predicted_fragments(
-    dumped_peptides: DumpedPeptides,
-    fragment_intensity_for_sage: FragmentIntensityForSage,
-    fragment_intensity_cache_path: str,
-    min_charge: int,
-    max_charge: int,
-    binning: str,
-    bin_width: float,
-    target_pixels: int,
+def check_speclib(
+    dumped_peptides: DumpedPeptides, path: str, min_charge: int, max_charge: int
 ):
-    """Histogram every cached Koina fragment of this job's target peptides
-    into a `PredictedFragmentGrid`, resolving ranges through the exported
-    pointer index and computing fragment m/z from sequence + annotation id
-    (the cache stores none). Runs in `venvs/featureprediction` for
-    `feature_prediction.fragment_mz`. Independently requestable; requesting
-    it runs `export_fragment_intensity_for_sage`, including its cache fill."""
-    grid = output(PredictedFragmentGrid)
-    return grid
-
-
-@command(
-    "venvs/common/bin/python scripts/mass_grid_heatmap.py {grid} {heatmap}"
-    " --color-scale {color_scale} --vmax-percentile {vmax_percentile}"
-)
-def plot_mass_grid(grid: MassGrid, color_scale: str, vmax_percentile: float):
-    heatmap = output(MassGridHeatmap)
-    return heatmap
-
-
-@command(
-    "venvs/common/bin/python scripts/peptide_length_histogram.py {dumped_peptides} {histogram}"
-)
-def plot_peptide_length_histogram(dumped_peptides: DumpedPeptides):
-    histogram = output(PeptideLengthHistogram)
-    return histogram
+    """Check the SPECLIB at `path` (a `[speclib]` job's `path`, e.g. under the
+    Makefile-managed `speclibs` symlink) against this job's `dumped_peptides` and
+    precursor charges, then symlink it in as this rule's output. Needs only
+    `dumped_peptides`, so a SPECLIB made for another peptide table or charge range
+    fails here, before the first search, not in the final `run_sage`; SAGE repeats
+    the fingerprint and charge checks itself."""
+    speclib = output(Speclib)
+    return speclib
 
 
 def _fdr_levels_record_flags(args: CommandArgs, tool_command: str) -> str:
@@ -1382,19 +1146,11 @@ def _run_sage_command(args: CommandArgs) -> str:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
     if args.inputs.predicted_iim is not None:
         flags += f" --predicted-iim {shlex.quote(str(args.inputs.predicted_iim))}"
-    # Both-or-neither, mirroring Rust's own `Input::build()` validation --
-    # `fragment_intensity_cache_path` is the shared cache *directory* (a plain
-    # config path, not a node -- see `_DEFAULT_CACHE_ROOT`); the Rust reader
-    # only ever wants its `arrays.mmappet` subdirectory (never
-    # `index.sqlite3`/`write.lock`), see `docs/ai/predicted_fragment_intensity.md`.
-    if args.inputs.predicted_fragment_intensity_index is not None:
-        frag_index = shlex.quote(str(args.inputs.predicted_fragment_intensity_index))
-        frag_cache = shlex.quote(
-            str(Path(args.config.fragment_intensity_cache_path) / "arrays.mmappet")
-        )
+    if args.inputs.speclib is not None:
+        speclib = Path(args.inputs.speclib)
         flags += (
-            f" --predicted-fragment-intensity-index {frag_index}"
-            f" --predicted-fragment-intensity-cache {frag_cache}"
+            f" --predicted-fragment-intensity-index {shlex.quote(str(speclib / 'index.mmappet'))}"
+            f" --predicted-fragment-intensity-cache {shlex.quote(str(speclib / 'arrays.mmappet'))}"
         )
 
     sage = (
@@ -1421,9 +1177,8 @@ def run_sage(
     tof2mz: Tof2MzTable,
     predicted_rt: PredictedRt | None = None,
     predicted_iim: PredictedIim | None = None,
-    predicted_fragment_intensity_index: FragmentIntensityForSage | None = None,
-    fragment_intensity_cache_path: str = "",
     compact_peptides: CompactPeptidesTable | None = None,
+    speclib: Speclib | None = None,
 ):
     """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
     Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
@@ -1434,16 +1189,10 @@ def run_sage(
     enforces Rust-side. See plans/better_sage_filtering.md's B.4-B.6 and
     plans/rt_iim_independent_dimensions.md.
 
-    `predicted_fragment_intensity_index` (a mixed Node/`None` input) and
-    `fragment_intensity_cache_path` (a plain config path, since the shared
-    cache is no longer a node -- see `_DEFAULT_CACHE_ROOT`) are both-or-
-    neither, gated by `"fragment_intensity" in cfg` at the workflow
-    call site, not by anything in this function. The path defaults to `""`
-    rather than `None` because config values are serialized into the node's
-    `dependencies.toml` and TOML has no null; only the index input decides
-    whether either is used --
-    feature-only (`ms2_*` scoring columns), no hard eviction, independent
-    of predicted_rt/predicted_iim. See
+    `speclib` (`check_speclib`'s output, a mixed Node/`None` input) is the only
+    source of predicted fragment intensities: SAGE gets its `index.mmappet` and
+    `arrays.mmappet` -- feature-only (`ms2_*` scoring columns), no hard eviction,
+    independent of predicted_rt/predicted_iim. See
     `git/sage/docs/ai/predicted_fragment_intensity.md`.
 
     Sage reads fragment m/z as `tof2mz[tof]` from `pmsms`' `tof` column. `pmsms`
@@ -1486,7 +1235,9 @@ _NO_PREDICTION_TEXT = "no prediction requested for this dimension\n"
 # :8500 gets back raw HTTP/2 SETTINGS-frame bytes (`BadStatusLine`), since
 # gRPC always runs over HTTP/2; :8501 is real Triton HTTP on the same host.
 _DEFAULT_KOINA_GRPC_SERVER_URL = "192.168.1.222:8500"  # predict_iim (koinapy/IM2Deep)
-_DEFAULT_KOINA_HTTP_SERVER_URL = "192.168.1.222:8501"  # predict_rt (direct HTTP/Chronologer)
+_DEFAULT_KOINA_HTTP_SERVER_URL = (
+    "192.168.1.222:8501"  # predict_rt (direct HTTP/Chronologer)
+)
 
 
 def _server_url_arg(value: str | list[str] | None, default: str) -> str:
@@ -1504,16 +1255,14 @@ def _server_url_arg(value: str | list[str] | None, default: str) -> str:
     return ",".join(value)
 
 
-
-
 @command(
     "venvs/featureprediction/bin/feature-prediction-generate-rt"
     " {dumped_peptides} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
-    " --cache-path {rt_cache_path}"
-,
-    threads=CORES)
+    " --cache-path {rt_cache_path}",
+    threads=CORES,
+)
 def predict_rt(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
@@ -1542,9 +1291,9 @@ def predict_rt(
     " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
-    " --cache-path {iim_cache_path}"
-,
-    threads=CORES)
+    " --cache-path {iim_cache_path}",
+    threads=CORES,
+)
 def predict_iim(
     dumped_peptides: DumpedPeptides,
     sage_results_tsv: SageResultsTsv,
@@ -1575,9 +1324,9 @@ def predict_iim(
     " {sage_results_tsv} {predicted_rt} {dumped_peptides} {mz_corrected_precursors}"
     " {output_precursors} {rt_tolerance} {rt_model} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
-    " --tolerance-method {tolerance_method} --fdr {fdr}"
-,
-    threads=CORES)
+    " --tolerance-method {tolerance_method} --fdr {fdr}",
+    threads=CORES,
+)
 def correct_precursors_rt(
     sage_results_tsv: SageResultsTsv,
     predicted_rt: PredictedRt,
@@ -1601,9 +1350,9 @@ def correct_precursors_rt(
     " {output_precursors} {mobility_tolerance} {iim_models} {plot}"
     " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
-    " --tolerance-method {tolerance_method} --fdr {fdr}"
-,
-    threads=CORES)
+    " --tolerance-method {tolerance_method} --fdr {fdr}",
+    threads=CORES,
+)
 def correct_precursors_iim(
     sage_results_tsv: SageResultsTsv,
     predicted_iim: PredictedIim,
@@ -1708,12 +1457,6 @@ def update_sage_config_rt_iim(
     return recalibrated_sage_config
 
 
-# mokapot's own CLI default (`--folds`, never overridden here) -- kept in sync
-# manually since it determines how `_mokapot_command` splits cores between
-# fold-level (`--max_workers`) and per-fit (`--xgboost_n_jobs`) parallelism.
-_MOKAPOT_FOLDS = 3
-
-
 def _mokapot_command(args: CommandArgs) -> str:
     """Python command callback, not a static template -- lets `--plugin`
     be added conditionally without necroflow's string-template placeholders
@@ -1779,12 +1522,14 @@ def _mokapot_command(args: CommandArgs) -> str:
     # its own `--*_n_jobs`-wide plugin fit, so reading the machine here would
     # oversubscribe whatever else the scheduler is running alongside it.
     n_cores = max(1, int(args.constraints.threads))
-    max_workers = min(_MOKAPOT_FOLDS, n_cores)
+    max_workers = min(args.config.folds, n_cores)
     per_fit_jobs = max(1, n_cores // max_workers)
 
     plugin_flags = ""
     if args.config.plugin == "xgboost":
-        plugin_flags = f" --xgboost_n_jobs {per_fit_jobs} --xgboost_seed {args.config.seed}"
+        plugin_flags = (
+            f" --xgboost_n_jobs {per_fit_jobs} --xgboost_seed {args.config.seed}"
+        )
         if args.config.xgboost_bagging_n_estimators > 0:
             plugin_flags += (
                 f" --xgboost_bagging_n_estimators {args.config.xgboost_bagging_n_estimators}"
@@ -1792,19 +1537,23 @@ def _mokapot_command(args: CommandArgs) -> str:
                 f" --xgboost_bagging_seed {args.config.xgboost_bagging_seed}"
             )
     elif args.config.plugin == "lightgbm":
-        plugin_flags = f" --lightgbm_n_jobs {per_fit_jobs} --lightgbm_seed {args.config.seed}"
+        plugin_flags = (
+            f" --lightgbm_n_jobs {per_fit_jobs} --lightgbm_seed {args.config.seed}"
+        )
 
     adapter_flags = ""
     if args.config.rt_source is not None or args.config.iim_source is not None:
         rt_source = shlex.quote(args.config.rt_source or "none")
         iim_source = shlex.quote(args.config.iim_source or "none")
-        adapter_flags = f" --mode sage --rt-source {rt_source} --iim-source {iim_source}"
+        adapter_flags = (
+            f" --mode sage --rt-source {rt_source} --iim-source {iim_source}"
+        )
     mokapot = (
         f"venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py -i {pin} -o {used_pin}"
         f"{adapter_flags}"
         f" && venvs/mokapot/bin/mokapot {used_pin} --dest_dir {workdir}"
         f" --train_fdr {args.config.train_fdr} --test_fdr {args.config.test_fdr}"
-        f" --max_workers {max_workers} --seed {args.config.seed} --keep_decoys"
+        f" --folds {args.config.folds} --max_workers {max_workers} --seed {args.config.seed} --keep_decoys"
         f"{plugin_flag}{plugin_flags}"
     )
     return (
@@ -1820,6 +1569,7 @@ def mokapot(
     sage_results_tsv: SageResultsTsv,
     train_fdr: float = 0.05,
     test_fdr: float = 0.01,
+    folds: int = 3,
     plugin: str | None = None,
     rt_source: str | None = None,
     iim_source: str | None = None,
@@ -1913,144 +1663,35 @@ def compress_with_pigz(path: NodeType):
     return archive
 
 
-@command("ln -s $(realpath {path}) {workflow}")
-def source_fragpipe_workflow(path: str):
-    workflow = output(FragpipeWorkflow)
-    return workflow
-
-
-@command(
-    # `cd` changes the meaning of every relative path substituted into this
-    # template, including the philosopher binary's own repo-relative path and
-    # {decoy_fasta} itself -- so all of them are frozen to absolute via shell
-    # variables *before* the cd, same reasoning as source_fasta's realpath.
-    "REPO_ROOT=$(pwd) && FASTA_ABS=$(realpath {fasta})"
-    " && DECOY_ABS=$(realpath -m {decoy_fasta})"
-    " && cd {workdir}"
-    ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
-    " workspace --init --nocheck"
-    ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
-    ' database --custom "$FASTA_ABS" --prefix rev_'
-    ' && mv $(ls *decoys*.fas | head -n 1) "$DECOY_ABS"'
-    " && rm -rf .meta"
-    ' && test -f "$DECOY_ABS"'
-)
-def generate_fragpipe_decoy_fasta(fasta: Fasta):
-    decoy_fasta = output(FragpipeDecoyFasta)
-    return decoy_fasta
-
-
-@command(
-    "sed -e 's|^database\\.db-path=.*|database.db-path={decoy_fasta}|'"
-    " {workflow} > {patched_workflow}"
-)
-def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDecoyFasta):
-    patched_workflow = output(FragpipeWorkflow)
-    return patched_workflow
-
-
-@command(
-    "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
-    " {fasta} {pmsms} {precursors}"
-    " --charges {charges} --max-peptides-per-protein {max_peptides_per_protein}"
-    " --seed {seed}"
-    " && test -f {pmsms}/schema.txt && test -f {pmsms}/dataindex.mmappet/schema.txt"
-    " && test -f {precursors}/schema.txt"
-)
-def simulate_peptides_to_pmsms(
-    fasta: Fasta,
-    charges: str,
-    max_peptides_per_protein: int,
-    seed: int,
-):
-    pmsms = output(SyntheticPmsms)
-    precursors = output(SyntheticPrecursors)
-    return pmsms, precursors
-
-
-@command(
-    "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
-    " --threads {threads} --numpress --zlib-level 9"
-    " && test -f {mzml} && test -f {idmap}/schema.txt",
-    threads=CORES,
-)
-def convert_synthetic_pmsms_to_mzml(
-    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors
-):
-    mzml = output(SyntheticMzml)
-    idmap = output(SyntheticMzmlIdmap)
-    return mzml, idmap
-
-
-@command(
-    "venvs/common/bin/msms2mgf {pmsms} {precursors} {config_path} {mgf}"
-    " && test -f {mgf}"
-)
-def convert_synthetic_pmsms_to_mgf(
-    pmsms: SyntheticPmsms,
-    precursors: SyntheticPrecursors,
-    config_path: str,
-):
-    mgf = output(SyntheticMgf)
-    return mgf
-
-
-@command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
-def write_fragpipe_manifest(mzml: TofFilteredMzml):
-    manifest = output(FragpipeManifest)
-    return manifest
-
-
-@command(
-    "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
-    " --workflow {workflow} --manifest {manifest} --workdir {dir}"
-    " --config-tools-folder software/fragpipe/fragpipe-24.0/tools"
-    " --threads {threads} --ram {ram}"
-    ' && test -n "$(ls {dir}/log_*.txt 2>/dev/null)"',
-    threads=CORES,
-)
-def run_fragpipe(manifest: FragpipeManifest, workflow: FragpipeWorkflow, ram: int = 0):
-    dir = output(FragpipeResultsDir)
-    return dir
-
-
-@command("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
-def extract_fragpipe_log(dir: FragpipeResultsDir):
-    log = output(FragpipeLog)
-    return log
-
-
-@command(
-    "grep -m 1 temp {log} > {summary}"
-    " && grep -n 'MASS CALIBRATION' {log} -A 8 >> {summary}"
-    " && grep 'Final report numbers after FDR filtering, and post-processing' {log} >> {summary}"
-)
-def summarize_fragpipe(log: FragpipeLog):
-    summary = output(FragpipeSummary)
-    return summary
-
-
 @workflow
 def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
-    """Main IonMaiden pipeline."""
+    """Main IonMaiden pipeline. A job with `[fragpipe]` needs
+    `fragpipe_pipeline.py:ionmaiden_fragpipe_pipeline` instead."""
+    if "fragpipe" in config:
+        raise ValueError(
+            "[fragpipe] runs only under git/ionmaidentools/src/ionmaidentools/"
+            "fragpipe_pipeline.py:ionmaiden_fragpipe_pipeline -- point the job's "
+            ".pipeline there"
+        )
+    build_ionmaiden_pipeline(P, config)
+
+
+def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
+    """The main IonMaiden pipeline's rules, called inside an active workflow
+    (`ionmaiden_pipeline`, `fragpipe_pipeline.ionmaiden_fragpipe_pipeline`)."""
     cfg = DotDict.Recursive(config)
     P.pipeline_config = write_pipeline_config(text=tomlkit.dumps(config))
 
     # Acquisition
     P.tdf = source_bruker_d(path=cfg.tdf_path)
     P.fasta = source_fasta(path=cfg.fasta_path)
-    P.mkpmsms_binary = source_mkpmsms_binary(
-        path="git/ionmaidenmetal/build/mkpmsms"
-    )
+    P.mkpmsms_binary = source_mkpmsms_binary(path="git/ionmaidenmetal/build/mkpmsms")
     P.sage_summarize_module = source_sage_summarize_module(
         path="git/searchops/src/searchops/sage.py"
     )
     P.sage_binary = source_sage_binary(path="git/sage/target/release/sage")
     P.dump_peptides_binary = source_dump_peptides_binary(
         path="git/sage/target/release/dump_peptides"
-    )
-    P.dump_fragment_index_binary = source_dump_fragment_index_binary(
-        path="git/sage/target/release/dump_fragment_index"
     )
 
     # Raw Extraction
@@ -2200,13 +1841,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
         )
 
-        # Derived straight from `cfg.sage.database` (not sliced out of the
-        # `sage_config` node above) so two job configs that only differ in
-        # unrelated sage settings (precursor_tol, report_psms, ...) but
-        # share the same digestion settings produce the same
-        # content-addressed node here, reusing one `dump_peptides` run.
-        # Only the keys `Parameters::digest` reads, so search-only settings
-        # like `bucket_size` do not rerun `dump_peptides` and its predictions.
         database = cfg.sage.database
         dump_peptides_database = {
             "decoy_tag": database["decoy_tag"],
@@ -2218,15 +1852,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             "static_mods": database["static_mods"],
             "variable_mods": database["variable_mods"],
         }
-        fragment_index_database = {
-            **dump_peptides_database,
-            "min_ion_index": database["min_ion_index"],
-        }
         P.dump_peptides_config = write_dump_peptides_config(
             text=json.dumps(dump_peptides_database, sort_keys=True, indent=2) + "\n"
-        )
-        P.fragment_index_config = write_fragment_index_config(
-            text=json.dumps(fragment_index_database, sort_keys=True, indent=2) + "\n"
         )
         P.dumped_peptides = dump_peptides(
             P.fasta, P.dump_peptides_config, P.dump_peptides_binary
@@ -2236,87 +1863,41 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.compact_peptides = dump_compact_peptides(
             P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
-        _compact_peptides = P.compact_peptides if _sage_searches_sliced(cfg.sage) else None
+        _compact_peptides = (
+            P.compact_peptides if _sage_searches_sliced(cfg.sage) else None
+        )
 
         # Shared prediction caches, addressed by path rather than produced by
         # a rule -- see `_DEFAULT_CACHE_ROOT` for why they sit outside `nodes/`.
         # Each directory is named by what its own cache key does not cover, so
-        # switching model or fragmentation type opens a different cache instead
-        # of mixing incomparable predictions under one key.
+        # switching model opens a different cache instead of mixing incomparable
+        # predictions under one key.
         _cache_dir = _cache_root()
-        _fragment_intensity_cache_path = str(
-            _cache_dir
-            / "fragment_intensity"
-            / f"{_KOINA_INTENSITY_MODEL}_{_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE}"
-        )
         _rt_cache_path = str(_cache_dir / "rt" / _KOINA_RT_MODEL)
         _iim_cache_path = str(_cache_dir / "iim" / _KOINA_IIM_MODEL)
 
-        # Independently requestable (see `export_fragment_intensity_for_sage`'s
-        # docstring) -- min_charge/max_charge mirror the same
-        # cfg.sage.precursor_charge-or-SAGE's-own-(2,4)-default derivation
-        # `[recalibration.iim]` uses below, computed here too since this
-        # runs unconditionally (not nested inside `"recalibration" in cfg`).
-        # One call now fills the shared cache and exports this job's pointer
-        # index from it, so the exported range can never miss keys the fill
-        # would have covered.
-        _fragment_min_charge, _fragment_max_charge = cfg.sage.get("precursor_charge", (2, 4))
-        P.fragment_intensity_for_sage = export_fragment_intensity_for_sage(
-            P.dumped_peptides,
-            fragment_intensity_cache_path=_fragment_intensity_cache_path,
-            min_charge=_fragment_min_charge,
-            max_charge=_fragment_max_charge,
-            collision_energy=_DEFAULT_FRAGMENT_COLLISION_ENERGY,
-            fragmentation_type=_DEFAULT_FRAGMENT_FRAGMENTATION_TYPE,
-        )
-
-        # Request-only diagnostics over the digest and both fragment indices;
-        # labels are `<source>_grid_<variant>` / `<source>_heatmap_<variant>`.
-        P.peptide_length_histogram = plot_peptide_length_histogram(P.dumped_peptides)
-        for variant_name, variant in MASS_GRID_VARIANTS.items():
-            binning = dict(
-                binning=variant.binning,
-                bin_width=variant.bin_width,
-                target_pixels=MASS_GRID_TARGET_PIXELS,
-            )
-            grids = {
-                "fragment_index": bin_fragment_index(
-                    P.fasta,
-                    P.fragment_index_config,
-                    P.dump_fragment_index_binary,
-                    **binning,
-                ),
-                "predicted_fragment": bin_predicted_fragments(
-                    P.dumped_peptides,
-                    P.fragment_intensity_for_sage,
-                    fragment_intensity_cache_path=_fragment_intensity_cache_path,
-                    min_charge=_fragment_min_charge,
-                    max_charge=_fragment_max_charge,
-                    **binning,
-                ),
-            }
-            for source, grid in grids.items():
-                P[f"{source}_grid_{variant_name}"] = grid
-                P[f"{source}_heatmap_{variant_name}"] = plot_mass_grid(
-                    grid,
-                    color_scale=variant.color_scale,
-                    vmax_percentile=variant.vmax_percentile,
-                )
-
-        # `[fragment_intensity]` (presence-only table) is the on/off switch
-        # for actually feeding the cache above into search -- without this
-        # gate, threading `P.fragment_intensity_for_sage` into `run_sage`
-        # unconditionally would make *every* sage job transitively depend on
-        # `export_fragment_intensity_for_sage`, breaking its own documented
-        # "never runs just because `dumped_peptides` exists" invariant.
-        # Mirrors `"recalibration" in cfg`/`"rt"/"iim" in cfg.recalibration`'s
-        # own table-presence-as-flag convention.
+        # Predicted fragment intensities come only from a SPECLIB: `[speclib]`
+        # (`path = "speclibs/<name>"`), checked against this job's `dumped_peptides`
+        # and the search's precursor charges (`cfg.sage.precursor_charge`, else
+        # SAGE's own (2, 4) default) before the first search.
         if "fragment_intensity" in cfg:
-            _final_pass_fragment_intensity_index = P.fragment_intensity_for_sage
-            _final_pass_fragment_intensity_cache_path = _fragment_intensity_cache_path
+            raise ValueError(
+                "[fragment_intensity] is gone: give the job a SPECLIB with [speclib] "
+                'path = "speclibs/<name>" (make one with feature-prediction-make-speclib)'
+            )
+        _fragment_min_charge, _fragment_max_charge = cfg.sage.get(
+            "precursor_charge", (2, 4)
+        )
+        if "speclib" in cfg:
+            P.speclib = check_speclib(
+                P.dumped_peptides,
+                path=cfg.speclib.path,
+                min_charge=_fragment_min_charge,
+                max_charge=_fragment_max_charge,
+            )
+            _final_pass_speclib = P.speclib
         else:
-            _final_pass_fragment_intensity_index = None
-            _final_pass_fragment_intensity_cache_path = ""
+            _final_pass_speclib = None
 
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
@@ -2385,7 +1966,9 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 fdr=cfg.sage_summarize.fdr,
             )
             P.recalibrated_sage_config = update_sage_config(
-                P.sage_config, P.precursor_mz_search_tolerance, P.fragment_mz_search_tolerance,
+                P.sage_config,
+                P.precursor_mz_search_tolerance,
+                P.fragment_mz_search_tolerance,
             )
 
             # RT and IIM are independent, sibling optional steps, each gated
@@ -2414,10 +1997,15 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             current_precursors = P.recalibrated_precursors
 
             if "rt" in dimensions:
-                rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt["tolerance_percentiles"]
-                rt_tolerance_method = cfg.recalibration.rt.get("tolerance_method", "theoretic")
+                rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt[
+                    "tolerance_percentiles"
+                ]
+                rt_tolerance_method = cfg.recalibration.rt.get(
+                    "tolerance_method", "theoretic"
+                )
                 rt_server_url = _server_url_arg(
-                    cfg.recalibration.rt.get("server_url"), _DEFAULT_KOINA_HTTP_SERVER_URL
+                    cfg.recalibration.rt.get("server_url"),
+                    _DEFAULT_KOINA_HTTP_SERVER_URL,
                 )
                 P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
                     P.dumped_peptides,
@@ -2454,16 +2042,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.predicted_rt = None
 
             if "iim" in dimensions:
-                # min_charge/max_charge: explicit `[recalibration.iim]`
-                # override if given, else mirror whatever charge range the
-                # SAGE run this feeds will itself search -- `cfg.sage`'s own
-                # `precursor_charge` if set, else SAGE's own compiled-in
-                # default (2, 4) (`crates/sage-cli/src/input.rs`:
-                # `precursor_charge.unwrap_or((2, 4))`). Real job configs
-                # (e.g. jobs/f9477_gam_test.toml) often leave
-                # `sage.precursor_charge` unset entirely, relying on
-                # per-precursor charges instead -- this must not crash on
-                # that, and should match SAGE's real default when it does.
                 default_precursor_charge = cfg.sage.get("precursor_charge", (2, 4))
                 rt_iim_min_charge = cfg.recalibration.iim.get(
                     "min_charge", default_precursor_charge[0]
@@ -2471,10 +2049,15 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 rt_iim_max_charge = cfg.recalibration.iim.get(
                     "max_charge", default_precursor_charge[1]
                 )
-                iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim["tolerance_percentiles"]
-                iim_tolerance_method = cfg.recalibration.iim.get("tolerance_method", "theoretic")
+                iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim[
+                    "tolerance_percentiles"
+                ]
+                iim_tolerance_method = cfg.recalibration.iim.get(
+                    "tolerance_method", "theoretic"
+                )
                 iim_server_url = _server_url_arg(
-                    cfg.recalibration.iim.get("server_url"), _DEFAULT_KOINA_GRPC_SERVER_URL
+                    cfg.recalibration.iim.get("server_url"),
+                    _DEFAULT_KOINA_GRPC_SERVER_URL,
                 )
                 P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
                     P.dumped_peptides,
@@ -2488,12 +2071,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     server_url=iim_server_url,
                     fdr=cfg.sage_summarize.fdr,
                 )
-                # Chained, not recombined: correct_precursors_iim's
-                # mz_corrected_precursors input becomes correct_precursors_rt's
-                # own output when both dimensions are active, so a single
-                # final precursors table ends up with both corrections
-                # applied (RtCorrectedPrecursors is a RecalibratedPrecursors
-                # subclass, satisfies either call site's contract).
                 (
                     P.rt_iim_corrected_precursors,
                     precursor_correction_mobility_tolerance,
@@ -2515,15 +2092,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             else:
                 P.predicted_iim = None
 
-            # update_sage_config_rt_iim needs a real RtTolerance/
-            # MobilityTolerance for whichever dimension's correction ran
-            # (tighter, post-correction fit) -- the sentinel for whichever
-            # dimension is inactive (including both, when `dimensions` is
-            # empty). Unlike predicted_rt/predicted_iim above,
-            # update_sage_config_rt_iim's rt_tolerance/mobility_tolerance
-            # inputs are still plain required NodeTypes, not mixed
-            # Node/None -- out of scope for this refactor -- so the
-            # sentinel stays here.
             P.precursor_correction_rt_tolerance = (
                 precursor_correction_rt_tolerance
                 if precursor_correction_rt_tolerance is not None
@@ -2535,12 +2103,6 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 else write_no_prediction_marker(text=_NO_PREDICTION_TEXT)
             )
 
-            # Unconditional -- a safe no-op copy-through when `dimensions`
-            # is empty (`_update_sage_config_rt_iim_command`'s own
-            # docstring documents this fallback: `cp {sage_config}
-            # {recalibrated_sage_config}`, nothing else), so mz-only jobs
-            # and RT/IIM-active jobs share this one call and the one final
-            # `run_sage` call below.
             P.recalibrated_sage_config_rt_iim = update_sage_config_rt_iim(
                 P.recalibrated_sage_config,
                 P.precursor_correction_rt_tolerance,
@@ -2562,9 +2124,8 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 tof2mz=P.recalibrated_tof2mz_table,
                 predicted_rt=P.predicted_rt,
                 predicted_iim=P.predicted_iim,
-                predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
-                fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
                 compact_peptides=_compact_peptides,
+                speclib=_final_pass_speclib,
             )
 
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
@@ -2591,48 +2152,51 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_config,
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
-                predicted_fragment_intensity_index=_final_pass_fragment_intensity_index,
-                fragment_intensity_cache_path=_final_pass_fragment_intensity_cache_path,
                 compact_peptides=_compact_peptides,
+                speclib=_final_pass_speclib,
             )
 
-        P.confident_psms = filter_sage_results(P.sage_results_tsv, fdr=cfg.sage_summarize.fdr)
+        P.confident_psms = filter_sage_results(
+            P.sage_results_tsv, fdr=cfg.sage_summarize.fdr
+        )
         P.score_comparison = score_comparison(
-            P.search_pmsms, P.confident_psms, P.sage_matched_fragments, P.pseudomsms_config,
+            P.search_pmsms,
+            P.confident_psms,
+            P.sage_matched_fragments,
+            P.pseudomsms_config,
         )
 
-        # getattr, not `P.predicted_rt` directly -- the non-recalibration
-        # branch above never binds these labels at all (only the
-        # recalibration branch's own rt/iim sub-blocks do, each `None` when
-        # that dimension is inactive), and `Pipeline.__getattr__` raises
-        # `AttributeError` for an unbound label, not a Python-level
-        # default. `rt_source`/`iim_source` "external" exactly when that
-        # dimension's real external-prediction Node exists for this job --
-        # see `plans/mokapot_leakage_safe_pin.md`.
-        # `[mokapot].plugin` (optional, e.g. `plugin = "xgboost"`) --
-        # config-driven so a job can pick mokapot's own default (linear SVM)
-        # or xgboost.
-        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms, P.mokapot_fdr_levels = mokapot(
-            P.sage_results_pin,
-            P.sage_results_tsv,
-            # "" (not None) when unset -- necroflow's dependency-provenance
-            # recording can't serialize a bare `None` scalar kwarg value to
-            # TOML; "" is falsy in `_mokapot_command`'s own `if
-            # args.config.plugin` check, so the effect (no --plugin flag,
-            # mokapot's own default model) is identical.
-            plugin=(cfg.mokapot.get("plugin", "") if "mokapot" in cfg else ""),
-            rt_source=("external" if getattr(P, "predicted_rt", None) is not None else "none"),
-            iim_source=("external" if getattr(P, "predicted_iim", None) is not None else "none"),
-            seed=(cfg.mokapot.get("seed", 1) if "mokapot" in cfg else 1),
-            xgboost_bagging_n_estimators=(
-                cfg.mokapot.get("xgboost_bagging_n_estimators", 0) if "mokapot" in cfg else 0
-            ),
-            xgboost_bagging_max_samples=(
-                cfg.mokapot.get("xgboost_bagging_max_samples", 30_000) if "mokapot" in cfg else 30_000
-            ),
-            xgboost_bagging_seed=(
-                cfg.mokapot.get("xgboost_bagging_seed", 0) if "mokapot" in cfg else 0
-            ),
+        mokapot_cfg = cfg.get("mokapot", {})
+        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms, P.mokapot_fdr_levels = (
+            mokapot(
+                P.sage_results_pin,
+                P.sage_results_tsv,
+                folds=mokapot_cfg.get("folds", 3),
+                # "" (not None) when unset -- necroflow's dependency-provenance
+                # recording can't serialize a bare `None` scalar kwarg value to
+                # TOML; "" is falsy in `_mokapot_command`'s own `if
+                # args.config.plugin` check, so the effect (no --plugin flag,
+                # mokapot's own default model) is identical.
+                plugin=mokapot_cfg.get("plugin", ""),
+                rt_source=(
+                    "external"
+                    if getattr(P, "predicted_rt", None) is not None
+                    else "none"
+                ),
+                iim_source=(
+                    "external"
+                    if getattr(P, "predicted_iim", None) is not None
+                    else "none"
+                ),
+                seed=mokapot_cfg.get("seed", 1),
+                xgboost_bagging_n_estimators=mokapot_cfg.get(
+                    "xgboost_bagging_n_estimators", 0
+                ),
+                xgboost_bagging_max_samples=mokapot_cfg.get(
+                    "xgboost_bagging_max_samples", 30_000
+                ),
+                xgboost_bagging_seed=mokapot_cfg.get("xgboost_bagging_seed", 0),
+            )
         )
 
         # FDR Summary
@@ -2649,105 +2213,14 @@ def ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # plans/better_sage_filtering.md's B.6. The writers read fragment m/z as SAGE
     # does, from `tof` (plans/exports_from_tof2mz_table.md).
     P.search_mzml, P.search_mzml_idmap = convert_search_pmsms_to_mzml(
-        P.search_pmsms, current_tof2mz_table, current_precursors,
+        P.search_pmsms,
+        current_tof2mz_table,
+        current_precursors,
     )
-    mgf_config_path = cfg.get("mgf", {}).get("config_path")
-    if mgf_config_path:
+    if mgf_config_path := cfg.get("mgf", {}).get("config_path"):
         P.search_mgf = convert_search_pmsms_to_mgf(
             P.search_pmsms,
             current_tof2mz_table,
             current_precursors,
             config_path=mgf_config_path,
-        )
-
-    if "fragpipe" in cfg:
-        P.fragpipe_workflow = source_fragpipe_workflow(
-            path=cfg.fragpipe.workflow_path
-        )
-        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P.fasta)
-        P.fragpipe_workflow_patched = patch_fragpipe_workflow(
-            P.fragpipe_workflow, P.fragpipe_decoy_fasta
-        )
-        P.fragpipe_manifest = write_fragpipe_manifest(P.search_mzml)
-        P.fragpipe_results_dir = run_fragpipe(
-            P.fragpipe_manifest,
-            P.fragpipe_workflow_patched,
-            ram=cfg.fragpipe.get("ram", 0),
-        )
-        P.fragpipe_log = extract_fragpipe_log(P.fragpipe_results_dir)
-        P.fragpipe_summary = summarize_fragpipe(P.fragpipe_log)
-
-
-@workflow
-def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
-    """FragPipe smoke test on simulated data -- no Bruker .d input, no Sage.
-
-    1. Simulate tryptic peptides from cfg.fasta_path (a small multi-protein FASTA)
-       via Koina-predicted fragment ions, written as a pmsms dataset
-       (`simulate_peptides_to_pmsms`).
-    2. Convert that pmsms to a spectrum file: mzML (`convert_synthetic_pmsms_to_mzml`,
-       via `git/pmsms2mzml`) or MGF (`convert_synthetic_pmsms_to_mgf`, via
-       `venvs/common/bin/msms2mgf` + `[mgf].config_path`), picked by
-       cfg.output_format ("mzml", the default, or "mgf").
-    3. mzML only: run FragPipe on it (reusing ionmaiden_pipeline's FragPipe rules
-       verbatim -- source_fragpipe_workflow/generate_fragpipe_decoy_fasta/
-       write_fragpipe_manifest/run_fragpipe/extract_fragpipe_log/summarize_fragpipe).
-       MGF has no search engine wired to it here (msms2mgf's plain-MGF output isn't
-       what run_fragpipe's manifest step expects) -- P.synthetic_mgf is terminal.
-
-    Verified end to end against a real FragPipe 24.0 + Philosopher install with a
-    10-protein/~200-peptide synthetic FASTA: both convert_synthetic_pmsms_to_mzml
-    (-> FragPipe, all 10 proteins recovered) and convert_synthetic_pmsms_to_mgf
-    produced valid output from the same simulate_peptides_to_pmsms run.
-    """
-    cfg: DotDict = DotDict.Recursive(config)
-    P.pipeline_config = write_pipeline_config(text=tomlkit.dumps(config))
-
-    # Peptide Simulation
-    P.fasta = source_fasta(path=cfg.fasta_path)
-    P.synthetic_pmsms, P.synthetic_precursors = simulate_peptides_to_pmsms(
-        P.fasta,
-        charges=cfg.get("simulation", {}).get("charges", "2,3"),
-        max_peptides_per_protein=cfg.get("simulation", {}).get(
-            "max_peptides_per_protein", 12
-        ),
-        seed=cfg.get("simulation", {}).get("seed", 20260715),
-    )
-
-    # Spectrum File Creation
-    output_format = cfg.get("output_format", "mzml")
-    if output_format == "mzml":
-        P.synthetic_mzml, P.synthetic_mzml_idmap = convert_synthetic_pmsms_to_mzml(
-            P.synthetic_pmsms,
-            P.synthetic_precursors,
-        )
-
-        # FragPipe Search
-        P.fragpipe_workflow = source_fragpipe_workflow(
-            path=cfg.fragpipe.workflow_path
-        )
-        P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(P.fasta)
-        P.fragpipe_workflow_patched = patch_fragpipe_workflow(
-            P.fragpipe_workflow, P.fragpipe_decoy_fasta
-        )
-        P.fragpipe_manifest = write_fragpipe_manifest(P.synthetic_mzml)
-        P.fragpipe_results_dir = run_fragpipe(
-            P.fragpipe_manifest, P.fragpipe_workflow_patched
-        )
-        P.fragpipe_log = extract_fragpipe_log(P.fragpipe_results_dir)
-        P.fragpipe_summary = summarize_fragpipe(P.fragpipe_log)
-    elif output_format == "mgf":
-        mgf_config_path = cfg.get("mgf", {}).get("config_path")
-        if not mgf_config_path:
-            raise ValueError(
-                "cfg.mgf.config_path is required when cfg.output_format == 'mgf'"
-            )
-        P.synthetic_mgf = convert_synthetic_pmsms_to_mgf(
-            P.synthetic_pmsms,
-            P.synthetic_precursors,
-            config_path=mgf_config_path,
-        )
-    else:
-        raise ValueError(
-            f"cfg.output_format must be 'mzml' or 'mgf', got {output_format!r}"
         )

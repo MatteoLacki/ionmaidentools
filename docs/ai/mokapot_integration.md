@@ -225,7 +225,7 @@ fold- and thread-level serialization neither mokapot's defaults nor this
 pipeline's command ever turned on.
 
 `_mokapot_command` (`pipelines.py`) now computes core split at command-build
-time: `max_workers = min(_MOKAPOT_FOLDS=3, n_cores)`,
+time: `max_workers = min(folds, n_cores)`,
 `xgboost_n_jobs = max(1, n_cores // max_workers)` (`os.sched_getaffinity(0)`,
 not `os.cpu_count()`, so a cgroup/taskset-constrained container -- see
 `docker_present.sh` -- doesn't get oversubscribed). On this repo's dev box
@@ -234,6 +234,10 @@ core headroom. Applies to both mokapot call sites (plain-SAGE-PIN and the
 sagepy_rescore branch) uniformly, plugin or no plugin -- `--max_workers`
 helps the default linear-SVM path too; `--xgboost_n_jobs` only emitted when
 `plugin == "xgboost"` since it's a plugin-specific flag.
+
+`folds` is a `mokapot()` parameter (default 3, mokapot's own CLI default), passed as
+`--folds` and set by an optional `[mokapot].folds` (2026-10-26); before, it was a
+module constant `_MOKAPOT_FOLDS` the pipeline never passed to mokapot.
 
 Deliberately **not** a `mokapot()` rule kwarg / job-TOML knob -- it's pure
 execution tuning (thread count), not model behavior, so it doesn't belong in

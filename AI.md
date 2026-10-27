@@ -2,11 +2,15 @@
 
 ## What this repo is
 
-`src/ionmaidentools/pipelines.py` holds the necroflow workflows for the ionmaiden
-DIA timsTOF pipeline — the single module every job TOML's `.pipeline` key points at
-(e.g. `git/ionmaidentools/src/ionmaidentools/pipelines.py:ionmaiden_pipeline`). It has
-no other source files: one large module, `NodeType` subclasses + `@command`-decorated
-rule functions + two top-level `@workflow` functions.
+`src/ionmaidentools/pipelines.py` holds the necroflow workflow for the ionmaiden
+DIA timsTOF pipeline — the module almost every job TOML's `.pipeline` key points at
+(e.g. `git/ionmaidentools/src/ionmaidentools/pipelines.py:ionmaiden_pipeline`): one large
+module, `NodeType` subclasses + `@command`-decorated rule functions + the `@workflow`.
+`src/ionmaidentools/fragpipe_pipeline.py` builds on it with the FragPipe types, rules and
+two FragPipe workflows; `pipelines.py` imports nothing from it
+(`plans/fragpipe_pipeline_split.md` in necromerge2: an import the other way would load a
+second copy of `pipelines.py`, since necroflow loads a `.pipeline` file as an
+unregistered module, and moving the shared types out would rehash most rules).
 
 Package metadata (`pyproject.toml`): depends on `tomlkit` + `dictodot`, no CLI entry
 points registered — this package is imported by necroflow's job runner (`./nf`, i.e.
@@ -38,20 +42,24 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 - See root `CLAUDE.md`'s "Precursor table format" — all precursor tables in this pipeline
   are `.mmappet` directories (`MmappetDataset` subclasses here), never intermediate parquet.
 
-## Two workflows
+## Three workflows
 
-- `ionmaiden_pipeline`: the real pipeline — Bruker `.d` → MS1 peak picking → quadrupole
-  transmission → pseudo-MS/MS → SAGE search (+ optional recalibration pass, optional
-  MGF export when the job config has an `[mgf]` section, optional FragPipe side-by-side
-  comparison when it has a `[fragpipe]` section). `[mgf].config_path` is passed as a
-  scalar input to `convert_search_pmsms_to_mgf`; its value therefore selects and
-  fingerprints the MGF flavour. Jobs without that key do not add `search_mgf` to the
-  pipeline.
-- `fragpipe_synthetic_pipeline`: FragPipe smoke test on Koina-simulated peptides from a
-  FASTA (no Bruker `.d` input, no Sage) — reuses `ionmaiden_pipeline`'s FragPipe rules
-  verbatim (`source_fragpipe_workflow`/`generate_fragpipe_decoy_fasta`/
-  `patch_fragpipe_workflow`/`write_fragpipe_manifest`/`run_fragpipe`/`extract_fragpipe_log`/
-  `summarize_fragpipe`).
+- `pipelines.py:ionmaiden_pipeline`: the real pipeline — Bruker `.d` → MS1 peak picking →
+  quadrupole transmission → pseudo-MS/MS → SAGE search (+ optional recalibration pass,
+  optional MGF export when the job config has an `[mgf]` section). `[mgf].config_path` is
+  passed as a scalar input to `convert_search_pmsms_to_mgf`; its value therefore selects
+  and fingerprints the MGF flavour. Jobs without that key do not add `search_mgf` to the
+  pipeline. A `[fragpipe]` section is an error here. Its body is
+  `build_ionmaiden_pipeline(P, config)`, which the FragPipe workflow reuses.
+- `fragpipe_pipeline.py:ionmaiden_fragpipe_pipeline`: `ionmaiden_pipeline` plus a FragPipe
+  side-by-side search of its search mzML (`[fragpipe]` required: `workflow_path`,
+  optional `ram`).
+- `fragpipe_pipeline.py:fragpipe_synthetic_pipeline`: FragPipe smoke test on
+  Koina-simulated peptides from a FASTA (no Bruker `.d` input, no Sage).
+
+Both FragPipe workflows run the same search, `fragpipe_search` (`source_fragpipe_workflow`/
+`generate_fragpipe_decoy_fasta`/`patch_fragpipe_workflow`/`write_fragpipe_manifest`/
+`run_fragpipe`/`extract_fragpipe_log`/`summarize_fragpipe`, labelled `fragpipe_*`).
 
 ## Documentation index
 
@@ -61,13 +69,12 @@ measurements for each feature live in `docs/ai/`, one file per topic:
 | File | Covers |
 |------|--------|
 | `docs/ai/ms1_ms2_extraction.md` | C++ MS1 extraction, compact/query-oriented MS2 benchmark targets |
-| `docs/ai/fragment_intensity.md` | Fragment-intensity `PredictionCache` (`mutable=True`), its export, and wiring into `run_sage` |
+| `docs/ai/fragment_intensity.md` | Fragment-intensity `PredictionCache`, its export and `run_sage` wiring -- removed 2026-10-26; SPECLIB (`[speclib]`, `check_speclib`) is the only source now |
 | `docs/ai/recalibration_modes.md` | The three mz/RT/IIM recalibration modes, table-presence gating, tolerance percentiles/method, `server_url`, fragment m/z correction applied inside SAGE (`fragment_shift_ppm`) |
 | `docs/ai/run_sage_merge.md` | `run_sage`/`run_sage_with_predicted` merged into one mixed-Node/value rule |
 | `docs/ai/mokapot_integration.md` | Config-driven mokapot plugin, leakage-safe PIN filtering, real F9477 ablation-grid measurements |
 | `docs/ai/fdr_levels.md` | Spectra/peptidoforms/ions at 1% FDR as the last step of `run_sage`/`mokapot`, and recording runs in `$ION_MAIDEN_REGRESSION_DB` |
 | `docs/ai/rt_iim_caching.md` | `predict_rt`/`predict_iim`'s `PredictionCache` wiring, necroflow gotchas, measured payoff |
-| `docs/ai/mass_grid_plots.md` | Request-only mass-grid heatmaps (SAGE index, Koina predictions) and peptide length histogram; why the Koina builder computes fragment m/z |
 | `docs/ai/mapped_inputs.md` | `dump_compact_peptides`/`CompactPeptidesTable` for the sliced search, and the prediction nodes as mmappet datasets SAGE maps (2026-10-17) |
 | `docs/ai/bestrun.md` | `jobs/f9477_best.toml` — the standing best-known-config job, current numbers, and the ask-before-updating rule |
 
