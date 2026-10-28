@@ -1322,7 +1322,7 @@ def mokapot(
     train_fdr: float = 0.05,
     test_fdr: float = 0.01,
     folds: int = 3,
-    plugin: str | None = None,
+    plugin: str = "",
     rt_source: str | None = None,
     iim_source: str | None = None,
     seed: int = 1,
@@ -1583,6 +1583,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     if "sage" in cfg:
         P.sage_config = write_sage_config(text=_json_text(cfg.sage))
+        current_sage_config = P.sage_config
 
         database = cfg.sage.database
         dump_peptides_database = {
@@ -1618,6 +1619,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             else None
         )
 
+        predictions = {}  # run_sage's predicted_rt / predicted_iim
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
                 write_recalibration_precursor_selection_config(
@@ -1692,12 +1694,6 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 )
                 current_tof2mz_table = P.recalibrated_tof2mz_table
 
-            # tolerance_percentiles/tolerance_method: required explicitly in
-            # `[recalibration.rt]`/`[recalibration.iim]` (separate tables,
-            # 2026-08-25) -- never inherited from `cfg.recalibration`'s own
-            # (mz-scoped) `[recalibration.mz]` value; each of the three
-            # dimensions (mz, rt, iim) gets its own percentiles/method. See
-            # `git/featureprediction`'s `tolerance.select_tolerance`.
             if "rt" in cfg.recalibration:
                 speclib_rt = source_speclib_rt(
                     P.compact_peptides, name=speclib["retention_time"], **part
@@ -1724,8 +1720,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     fdr=cfg.sage_summarize.fdr,
                 )
                 corrections["rt"] = P.corrected_rt
-            else:
-                P.predicted_rt = None
+                predictions["predicted_rt"] = P.predicted_rt
 
             if "iim" in cfg.recalibration:
                 speclib_iim = source_speclib_iim(
@@ -1752,57 +1747,40 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     fdr=cfg.sage_summarize.fdr,
                 )
                 corrections["inv_ion_mobility"] = P.corrected_inv_ion_mobility
-            else:
-                speclib_iim = None
+                predictions["predicted_iim"] = speclib_iim
 
             P.recalibrated_precursors = update_precursors(P.search_precursors, **corrections)
-            current_precursors = P.recalibrated_precursors
             P.recalibrated_sage_config = update_sage_config(P.sage_config, **tolerances)
-            (
-                P.sage_results_json,
-                P.sage_results_pin,
-                P.sage_results_tsv,
-                P.sage_matched_fragments,
-                P.sage_fdr_levels,
-            ) = run_sage(
-                P.search_pmsms,
-                current_precursors,
-                P.fasta,
-                P.recalibrated_sage_config,
-                P.sage_binary,
-                tof2mz=current_tof2mz_table,
-                predicted_rt=P.predicted_rt,
-                predicted_iim=speclib_iim,
-                compact_peptides=P.compact_peptides,
-                speclib_fragments=speclib_fragments,
-            )
+            current_precursors = P.recalibrated_precursors
+            current_sage_config = P.recalibrated_sage_config
 
-            if "mz" in cfg.recalibration:
-                P.recalibrated_ppm_plot = plot_recalibrated_ppm(
-                    P.filtered_sage_results_tsv,
-                    P.sage_results_tsv,
-                    P.filtered_sage_matched_fragments,
-                    P.sage_matched_fragments,
-                    P.precursor_mz_search_tolerance,
-                    P.fragment_mz_search_tolerance,
-                    fdr=cfg.sage_summarize.fdr,
-                )
-        else:
-            (
-                P.sage_results_json,
-                P.sage_results_pin,
+        (
+            P.sage_results_json,
+            P.sage_results_pin,
+            P.sage_results_tsv,
+            P.sage_matched_fragments,
+            P.sage_fdr_levels,
+        ) = run_sage(
+            P.search_pmsms,
+            current_precursors,
+            P.fasta,
+            current_sage_config,
+            P.sage_binary,
+            tof2mz=current_tof2mz_table,
+            compact_peptides=P.compact_peptides,
+            speclib_fragments=speclib_fragments,
+            **predictions,
+        )
+
+        if "mz" in cfg.get("recalibration", {}):
+            P.recalibrated_ppm_plot = plot_recalibrated_ppm(
+                P.filtered_sage_results_tsv,
                 P.sage_results_tsv,
+                P.filtered_sage_matched_fragments,
                 P.sage_matched_fragments,
-                P.sage_fdr_levels,
-            ) = run_sage(
-                P.search_pmsms,
-                P.search_precursors,
-                P.fasta,
-                P.sage_config,
-                P.sage_binary,
-                tof2mz=P.tof2mz_table,
-                compact_peptides=P.compact_peptides,
-                speclib_fragments=speclib_fragments,
+                P.precursor_mz_search_tolerance,
+                P.fragment_mz_search_tolerance,
+                fdr=cfg.sage_summarize.fdr,
             )
 
         P.confident_psms = filter_sage_results(
@@ -1815,36 +1793,19 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.pseudomsms_config,
         )
 
-        mokapot_cfg = cfg.get("mokapot", {})
-        P.mokapot_used_pin, P.mokapot_peptides, P.mokapot_psms, P.mokapot_fdr_levels = (
-            mokapot(
+        if "mokapot" in cfg:
+            (
+                P.mokapot_used_pin,
+                P.mokapot_peptides,
+                P.mokapot_psms,
+                P.mokapot_fdr_levels,
+            ) = mokapot(
                 P.sage_results_pin,
                 P.sage_results_tsv,
-                folds=mokapot_cfg.get("folds", 3),
-                # "" (not None) when unset -- necroflow's dependency-provenance
-                # recording can't serialize a bare `None` scalar kwarg value to
-                # TOML; "" is falsy in `_mokapot_command`'s own `if
-                # args.config.plugin` check, so the effect (no --plugin flag,
-                # mokapot's own default model) is identical.
-                plugin=mokapot_cfg.get("plugin", ""),
-                rt_source=(
-                    "external"
-                    if getattr(P, "predicted_rt", None) is not None
-                    else "none"
-                ),
-                iim_source=(
-                    "external" if "iim" in cfg.get("recalibration", {}) else "none"
-                ),
-                seed=mokapot_cfg.get("seed", 1),
-                xgboost_bagging_n_estimators=mokapot_cfg.get(
-                    "xgboost_bagging_n_estimators", 0
-                ),
-                xgboost_bagging_max_samples=mokapot_cfg.get(
-                    "xgboost_bagging_max_samples", 30_000
-                ),
-                xgboost_bagging_seed=mokapot_cfg.get("xgboost_bagging_seed", 0),
+                rt_source="external" if "predicted_rt" in predictions else "none",
+                iim_source="external" if "predicted_iim" in predictions else "none",
+                **cfg.mokapot,
             )
-        )
 
         # FDR Summary
         P.sage_summary = sage_summarize(
