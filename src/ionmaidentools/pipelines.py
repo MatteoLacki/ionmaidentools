@@ -32,6 +32,33 @@ from necroflow import (
 CORES = os.cpu_count() or 1
 
 
+# --- base node types ---
+class MmappetDataset(NodeType):
+    """Base type for outputs that are mmappet directories (see CLAUDE.md's
+    "Precursor table format" convention). No `filename` of its own -- every
+    concrete mmappet output subclasses this and sets its own."""
+
+
+class Json(NodeType):
+    """A JSON file."""
+
+
+class Toml(NodeType):
+    """A TOML file."""
+
+
+class Tsv(NodeType):
+    """A tab-separated text file."""
+
+
+class Png(NodeType):
+    """A PNG image."""
+
+
+class Executable(NodeType):
+    """A program the pipeline runs."""
+
+
 # --- source node types ---
 class BrukerD(NodeType):
     filename = "input.d"
@@ -41,11 +68,11 @@ class Fasta(NodeType):
     filename = "fasta.fasta"
 
 
-class MkpmsmsBinary(NodeType):
+class MkpmsmsBinary(Executable):
     filename = "mkpmsms"
 
 
-class SageBinary(NodeType):
+class SageBinary(Executable):
     filename = "sage"
 
 
@@ -53,14 +80,8 @@ class SageSummarizeModule(NodeType):
     filename = "sage.py"
 
 
-class MmappetDataset(NodeType):
-    """Base type for outputs that are mmappet directories (see CLAUDE.md's
-    "Precursor table format" convention). No `filename` of its own -- every
-    concrete mmappet output subclasses this and sets its own."""
-
-
 # --- compute artifact node types ---
-class PipelineConfig(NodeType):
+class PipelineConfig(Toml):
     filename = "pipeline_config.toml"
 
 
@@ -80,7 +101,7 @@ class Ms2TsfEvents(MmappetDataset):
     filename = "events_ms2_tsf.mmappet"
 
 
-class ScaleEstimationConfig(NodeType):
+class ScaleEstimationConfig(Toml):
     filename = "scale_estimation_config.toml"
 
 
@@ -88,7 +109,7 @@ class ArgmaxSample(MmappetDataset):
     filename = "argmax_sample.mmappet"
 
 
-class ArgmaxSieveStats(NodeType):
+class ArgmaxSieveStats(Toml):
     filename = "sieve_stats.toml"
 
 
@@ -100,11 +121,11 @@ class ScaleEstimates(NodeType):
     filename = "scale_estimates"
 
 
-class PrecursorNeighborCountConfig(NodeType):
+class PrecursorNeighborCountConfig(Toml):
     filename = "precursor_neighbor_count_config.toml"
 
 
-class PrecursorCandidateSelectionConfig(NodeType):
+class PrecursorCandidateSelectionConfig(Toml):
     filename = "precursor_candidate_selection_config.toml"
 
 
@@ -116,11 +137,11 @@ class RawPrecursorClusters(MmappetDataset):
     filename = "raw_precursor_clusters.mmappet"
 
 
-class PrecursorAnnotationConfig(NodeType):
+class PrecursorAnnotationConfig(Toml):
     filename = "precursor_annotation_config.toml"
 
 
-class PostprocessingConfig(NodeType):
+class PostprocessingConfig(Toml):
     filename = "postprocessing_config.toml"
 
 
@@ -132,7 +153,7 @@ class PostprocessedPrecursorClusters(MmappetDataset):
     filename = "postprocessed_precursor_clusters.mmappet"
 
 
-class PrecursorTransmissionConfig(NodeType):
+class PrecursorTransmissionConfig(Toml):
     filename = "precursor_transmission_config.toml"
 
 
@@ -148,7 +169,7 @@ class FirstFilterPrecursors(MmappetDataset):
     filename = "first_filter_precursors.mmappet"
 
 
-class PseudomsmsConfig(NodeType):
+class PseudomsmsConfig(Toml):
     filename = "pseudomsms_config.toml"
 
 
@@ -164,7 +185,7 @@ class PreSageFilteredPrecursors(MmappetDataset):
     filename = "pre_sage_filtered_precursors.mmappet"
 
 
-class PrecursorNeighborsConfig(NodeType):
+class PrecursorNeighborsConfig(Toml):
     filename = "precursor_neighbors_config.toml"
 
 
@@ -188,11 +209,11 @@ class TofFilteredPrecursors(PreSageFilteredPrecursors):
     filename = "tof_filtered_precursors.mmappet"
 
 
-class SageConfig(NodeType):
+class SageConfig(Json):
     filename = "sage_config.json"
 
 
-class SageResultsJson(NodeType):
+class SageResultsJson(Json):
     filename = "results.json"
 
 
@@ -206,23 +227,23 @@ class SageResultsPin(Pin):
     filename = "results.sage.pin"
 
 
-class SageResultsTsv(NodeType):
+class SageResultsTsv(Tsv):
     filename = "results.sage.tsv"
 
 
-class SageMatchedFragments(NodeType):
+class SageMatchedFragments(Tsv):
     filename = "matched_fragments.sage.tsv"
 
 
-class SageFdrLevels(NodeType):
+class SageFdrLevels(Tsv):
     filename = "results.sage.fdr_levels.tsv"
 
 
-class DumpPeptidesBinary(NodeType):
+class DumpPeptidesBinary(Executable):
     filename = "dump_peptides"
 
 
-class DumpPeptidesConfig(NodeType):
+class DumpPeptidesConfig(Json):
     """The digestion settings from `cfg.sage.database` that `dump_peptides`
     reads (fasta, enzyme, mods, mass bounds, decoys)."""
 
@@ -237,19 +258,19 @@ class CompactPeptidesTable(MmappetDataset):
     filename = "compact_peptides.mmappet"
 
 
-class MokapotUsedPin(NodeType):
+class MokapotUsedPin(Pin):
     filename = "used.pin"
 
 
-class MokapotPeptides(NodeType):
+class MokapotPeptides(Tsv):
     filename = "mokapot.peptides.txt"
 
 
-class MokapotPsms(NodeType):
+class MokapotPsms(Tsv):
     filename = "mokapot.psms.txt"
 
 
-class MokapotFdrLevels(NodeType):
+class MokapotFdrLevels(Tsv):
     filename = "mokapot.fdr_levels.tsv"
 
 
@@ -289,15 +310,11 @@ class TarGz(NodeType):
     filename = "archive.tar.gz"
 
 
-class Png(NodeType):
-    filename = "plot.png"
-
-
-class SageSummary(NodeType):
+class SageSummary(Tsv):
     filename = "results.sage.summary.tsv"
 
 
-class RecalibrationPrecursorSelectionConfig(NodeType):
+class RecalibrationPrecursorSelectionConfig(Toml):
     filename = "recalibration_precursor_selection_config.toml"
 
 
@@ -332,18 +349,18 @@ class RecalibratedTof2MzTable(Tof2MzTable):
     filename = "recalibrated_tof2mz.mmappet"
 
 
-class RecalibrationConfig(NodeType):
+class RecalibrationConfig(Toml):
     filename = "recalibration_config.toml"
 
 
-class FragmentTolerance(NodeType):
+class FragmentTolerance(Json):
     """Fragment-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
     fit_fragment_mz from its own fitted model's residuals."""
 
     filename = "fragment_tolerance.json"
 
 
-class PrecursorTolerance(NodeType):
+class PrecursorTolerance(Json):
     """Precursor-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
     fit_precursor_mz from its own fitted model's residuals."""
 
@@ -358,22 +375,26 @@ class SerializedMzModel(NodeType):
     filename = "mz_model"
 
 
-class FragmentShiftPpm(MmappetDataset):
+class PrecursorColumn(MmappetDataset):
+    """One column row-aligned with search_precursors, set by update_precursors."""
+
+
+class FragmentShiftPpm(PrecursorColumn):
     """Each search precursor's `fragment_shift_ppm` (`bias + f_rt(rt)`, from
     fit_fragment_mz): SAGE divides its fragment m/z by `1 + fragment_shift_ppm·1e-6`."""
 
     filename = "fragment_shift_ppm.mmappet"
 
 
-class CorrectedMz(MmappetDataset):
+class CorrectedMz(PrecursorColumn):
     filename = "corrected_mz.mmappet"
 
 
-class CorrectedRt(MmappetDataset):
+class CorrectedRt(PrecursorColumn):
     filename = "corrected_rt.mmappet"
 
 
-class CorrectedIim(MmappetDataset):
+class CorrectedIim(PrecursorColumn):
     filename = "corrected_inv_ion_mobility.mmappet"
 
 
@@ -382,6 +403,14 @@ class RecalibratedPrecursors(TofFilteredPrecursors):
     dataset above, row-aligned and evaluated on the raw search_precursors."""
 
     filename = "recalibrated_precursors.mmappet"
+
+
+class FragmentMzFitPlot(Png):
+    filename = "fragment_mz_fit_plot.png"
+
+
+class PrecursorMzFitPlot(Png):
+    filename = "precursor_mz_fit_plot.png"
 
 
 class RecalibratedPpmPlot(Png):
@@ -395,25 +424,29 @@ class PredictedRt(MmappetDataset):
     filename = "predicted_rt.mmappet"
 
 
-class SpeclibFragments(NodeType):
+class SpeclibPart(NodeType):
+    """A SPECLIB part reflinked from the job's store (`source_speclib_*`)."""
+
+
+class SpeclibFragments(SpeclibPart):
     """A SPECLIB fragments part: `index.mmappet` + `arrays.mmappet`."""
 
     filename = "speclib_fragments"
 
 
-class SpeclibRt(NodeType):
+class SpeclibRt(SpeclibPart):
     """A SPECLIB retention_time part: `rt.mmappet`, one predicted HI per peptide row."""
 
     filename = "speclib_rt"
 
 
-class SpeclibIim(NodeType):
+class SpeclibIim(SpeclibPart):
     """A SPECLIB inverse_ion_mobility part: `iim.mmappet`, SAGE's `--predicted-iim`."""
 
     filename = "speclib_iim"
 
 
-class RtTolerance(NodeType):
+class RtTolerance(Json):
     """rt_tol_sec tolerance JSON (`ValueTolSpline`-shaped, wrapped as
     `{"rt_tol_sec": {...}}` -- see `feature_prediction.tolerance
     .write_value_tol_spline_json`). Produced by `fit_precursor_rt` from the
@@ -422,14 +455,14 @@ class RtTolerance(NodeType):
     filename = "rt_tolerance.json"
 
 
-class MobilityTolerance(NodeType):
+class MobilityTolerance(Json):
     """Same as `RtTolerance`, for `mobility_tol`/IIM. Produced by
     `fit_precursor_iim`."""
 
     filename = "mobility_tolerance.json"
 
 
-class PrecursorCorrectionRtModel(NodeType):
+class PrecursorCorrectionRtModel(Json):
     filename = "precursor_correction_rt_model.json"
 
 
@@ -873,7 +906,7 @@ def fit_fragment_mz(
     fragment_shift_ppm = output(FragmentShiftPpm)
     recalibrated_tof2mz = output(RecalibratedTof2MzTable)
     tolerance = output(FragmentTolerance)
-    plot = output(Png)
+    plot = output(FragmentMzFitPlot)
     return fragment_shift_ppm, recalibrated_tof2mz, tolerance, plot
 
 
@@ -890,7 +923,7 @@ def fit_precursor_mz(
 ):
     mz = output(CorrectedMz)
     tolerance = output(PrecursorTolerance)
-    plot = output(Png)
+    plot = output(PrecursorMzFitPlot)
     model = output(SerializedMzModel)
     return mz, tolerance, plot, model
 
