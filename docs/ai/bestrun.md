@@ -18,10 +18,25 @@ user's request for correct counting, not for a higher ion count. The job's final
 rerun by hand on the 2026-10-15 nodes' inputs with one binary (necromerge2
 `temp/peptide_views/merge/best/`): SAGE 1% 94,053 / 20,705 / 22,717 -> 95,216 / 21,046 / 23,031
 (spectra / peptidoforms / ions), mokapot 121,372 / 29,120 / 31,778 -> 122,144 / 28,884 / 31,680,
-within mokapot's noise. The "Current best" numbers below predate it; a full pipeline run (after
-rebuilding `git/sage/target/release`, whose Oct 16 binary ignores the key) should replace them.
+within mokapot's noise.
 
-## Current best (as of 2026-10-07)
+## Current best (2026-10-28)
+
+`[score_competition]` added (each precursor's ToF scores against its neighbours'; the settings of
+the former `f9477_best_plus_tof_filter`, `score_margin = 0.05`), on the SPECLIB store and after
+the precursor RT unit fix (necromerge2 `plans/precursor_corrections.md`). Each level at 1% FDR
+from its own competition (`*.fdr_levels.tsv`; run database rows 61/62):
+
+| | spectra | peptidoforms | ions |
+|---|---|---|---|
+| SAGE | 85,050 | 22,009 | 23,707 |
+| mokapot | 99,692 | **29,128** | **31,912** |
+
+Without `[score_competition]` (rows 58/59): mokapot 28,338 / 30,853. With DIA-NN 2.7.0 IIM it adds
+nothing (rows 63–66). These levels count differently from the entries below; don't compare
+across.
+
+## Previous best (2026-10-07)
 
 Same config as below plus mkpmsms `"ms2-peak-picker" = "local_max_intensity"` (was
 `local_max_score`): each fragment peak is written at its most intense TOF bin instead of its
