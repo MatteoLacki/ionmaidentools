@@ -416,26 +416,17 @@ class SpeclibIim(NodeType):
 class RtTolerance(NodeType):
     """rt_tol_sec tolerance JSON (`ValueTolSpline`-shaped, wrapped as
     `{"rt_tol_sec": {...}}` -- see `feature_prediction.tolerance
-    .write_value_tol_spline_json`). Produced by both `predict_rt`
-    (pre-correction) and `fit_precursor_rt` (post-correction,
-    tighter, the one actually fed to SAGE1 when RT correction runs)."""
+    .write_value_tol_spline_json`). Produced by `fit_precursor_rt` from the
+    corrected residuals."""
 
     filename = "rt_tolerance.json"
 
 
 class MobilityTolerance(NodeType):
-    """Same as `RtTolerance`, for `mobility_tol`/IIM. Produced by both
-    `predict_iim` and `fit_precursor_iim`."""
+    """Same as `RtTolerance`, for `mobility_tol`/IIM. Produced by
+    `fit_precursor_iim`."""
 
     filename = "mobility_tolerance.json"
-
-
-class RtFitPlot(Png):
-    filename = "rt_fit.png"
-
-
-class IimFitPlot(Png):
-    filename = "iim_fit.png"
 
 
 class PrecursorCorrectionRtModel(NodeType):
@@ -1102,72 +1093,31 @@ def run_sage(
 
 
 @command(
-    "venvs/featureprediction/bin/feature-prediction-generate-rt"
-    " {speclib_rt} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
-    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
-    " --tolerance-method {tolerance_method} --fdr {fdr}",
-    threads=CORES,
-)
-def predict_rt(
-    speclib_rt: SpeclibRt,
-    sage_results_tsv: SageResultsTsv,
-    tolerance_lo: int | float,
-    tolerance_hi: int | float,
-    tolerance_method: str,
-    fdr: int | float,
-):
-    """The SPECLIB's Chronologer HI calibrated to this run's RT on the first
-    search's confident PSMs (found by their `peptide_row`), for every peptide row."""
-    predicted_rt = output(PredictedRt)
-    rt_tolerance = output(RtTolerance)
-    plot = output(RtFitPlot)
-    return predicted_rt, rt_tolerance, plot
-
-
-@command(
-    "venvs/featureprediction/bin/feature-prediction-generate-iim"
-    " {speclib_iim} {sage_results_tsv} {mobility_tolerance} {plot}"
-    " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
-    " --tolerance-method {tolerance_method} --fdr {fdr}",
-    threads=CORES,
-)
-def predict_iim(
-    speclib_iim: SpeclibIim,
-    sage_results_tsv: SageResultsTsv,
-    tolerance_lo: int | float,
-    tolerance_hi: int | float,
-    tolerance_method: str,
-    fdr: int | float,
-):
-    """The tolerance of the SPECLIB's IM2Deep 1/K0 against the first search's
-    confident PSMs; SAGE reads that IIM from the SPECLIB as it is."""
-    mobility_tolerance = output(MobilityTolerance)
-    plot = output(IimFitPlot)
-    return mobility_tolerance, plot
-
-
-@command(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-rt"
-    " {sage_results_tsv} {predicted_rt} {precursors}"
-    " {rt} {rt_tolerance} {rt_model} {plot}"
+    " {sage_results_tsv} {speclib_rt} {precursors}"
+    " {predicted_rt} {rt} {rt_tolerance} {rt_model} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
 def fit_precursor_rt(
     sage_results_tsv: SageResultsTsv,
-    predicted_rt: PredictedRt,
+    speclib_rt: SpeclibRt,
     precursors: PreSageFilteredPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
     fdr: int | float,
 ):
+    """The SPECLIB's HI calibrated to this run's RT (`predicted_rt`, every peptide row),
+    and the precursors' RT corrected on top of it (`rt`), both fitted on the first
+    search's confident PSMs."""
+    predicted_rt = output(PredictedRt)
     rt = output(CorrectedRt)
     rt_tolerance = output(RtTolerance)
     rt_model = output(PrecursorCorrectionRtModel)
     plot = output(PrecursorCorrectionRtFitPlot)
-    return rt, rt_tolerance, rt_model, plot
+    return predicted_rt, rt, rt_tolerance, rt_model, plot
 
 
 @command(
@@ -1758,22 +1708,15 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 rt_tolerance_method = cfg.recalibration.rt.get(
                     "tolerance_method", "theoretic"
                 )
-                P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
-                    speclib_rt,
-                    P.filtered_sage_results_tsv,
-                    tolerance_lo=rt_tolerance_lo,
-                    tolerance_hi=rt_tolerance_hi,
-                    tolerance_method=rt_tolerance_method,
-                    fdr=cfg.sage_summarize.fdr,
-                )
                 (
+                    P.predicted_rt,
                     P.corrected_rt,
                     tolerances["rt_tolerance"],
                     P.precursor_correction_rt_model,
                     P.precursor_correction_rt_fit_plot,
                 ) = fit_precursor_rt(
                     P.filtered_sage_results_tsv,
-                    P.predicted_rt,
+                    speclib_rt,
                     P.search_precursors,
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
@@ -1793,14 +1736,6 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 ]
                 iim_tolerance_method = cfg.recalibration.iim.get(
                     "tolerance_method", "theoretic"
-                )
-                P.mobility_tolerance, P.iim_fit_plot = predict_iim(
-                    speclib_iim,
-                    P.filtered_sage_results_tsv,
-                    tolerance_lo=iim_tolerance_lo,
-                    tolerance_hi=iim_tolerance_hi,
-                    tolerance_method=iim_tolerance_method,
-                    fdr=cfg.sage_summarize.fdr,
                 )
                 (
                     P.corrected_inv_ion_mobility,
