@@ -223,12 +223,12 @@ column (Sage's `mz`-column input was removed).
 - `recalibrate_pmsms_mz(filtered results, filtered matched fragments, tof2mz_table,
   search_precursors)` fits `bias + f_mz(mz) + f_rt(rt)` and writes no pmsms.
   Outputs: `recalibrated_tof2mz_table` (`RecalibratedTof2MzTable`, float64,
-  `table[t] / (1 + f_mz(table[t])·1e-6)`), `fragment_shifted_precursors`
-  (`search_precursors` plus `fragment_shift_ppm = bias + f_rt(raw rt)`), tolerance
-  and plot.
-- `recalibrate_precursors` reads `fragment_shifted_precursors`, so the column rides
-  through every later precursor rewrite (m/z, RT, IIM; each rewrites the whole
-  table) into the final search's `current_precursors`.
+  `table[t] / (1 + f_mz(table[t])·1e-6)`), `fragment_shift_ppm` (one column,
+  `bias + f_rt(raw rt)` per search precursor), tolerance and plot.
+- m/z, RT and IIM corrections are likewise one column each, evaluated on the raw
+  `search_precursors`; `update_precursors` sets them all into
+  `recalibrated_precursors`, the final search's precursors
+  (necromerge2 `plans/precursor_corrections.md`).
 - Final `run_sage(search_pmsms, current_precursors, ...,
   tof2mz=recalibrated_tof2mz_table)`: Sage reads each fragment m/z as
   `table[tof] / (1 + fragment_shift_ppm·1e-6)`, applying the shift whenever the

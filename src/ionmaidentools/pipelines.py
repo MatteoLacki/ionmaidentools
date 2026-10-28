@@ -188,14 +188,6 @@ class TofFilteredPrecursors(PreSageFilteredPrecursors):
     filename = "tof_filtered_precursors.mmappet"
 
 
-class FragmentShiftedPrecursors(PreSageFilteredPrecursors):
-    """Precursors plus `fragment_shift_ppm` (`bias + f_rt(rt)`, from
-    recalibrate_pmsms_mz): SAGE divides each of the precursor's fragment m/z by
-    `1 + fragment_shift_ppm·1e-6`. Accepted wherever PreSageFilteredPrecursors is."""
-
-    filename = "fragment_shifted_precursors.mmappet"
-
-
 class SageConfig(NodeType):
     filename = "sage_config.json"
 
@@ -334,7 +326,7 @@ class Tof2MzTable(MmappetDataset):
 
 class RecalibratedTof2MzTable(Tof2MzTable):
     """Tof2MzTable with the fragment `f_mz` correction folded in (float64 column `mz`,
-    `table[t] / (1 + f_mz(table[t])·1e-6)`), produced by recalibrate_pmsms_mz.
+    `table[t] / (1 + f_mz(table[t])·1e-6)`), produced by fit_fragment_mz.
     Accepted wherever Tof2MzTable is."""
 
     filename = "recalibrated_tof2mz.mmappet"
@@ -346,30 +338,48 @@ class RecalibrationConfig(NodeType):
 
 class FragmentTolerance(NodeType):
     """Fragment-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
-    recalibrate_pmsms_mz from its own fitted model's residuals."""
+    fit_fragment_mz from its own fitted model's residuals."""
 
     filename = "fragment_tolerance.json"
 
 
 class PrecursorTolerance(NodeType):
     """Precursor-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
-    recalibrate_precursors from its own fitted model's residuals."""
+    fit_precursor_mz from its own fitted model's residuals."""
 
     filename = "precursor_tolerance.json"
 
 
 class SerializedMzModel(NodeType):
     """A fitted searchops.models.MzCorrectionModel, dumped via its own save()
-    (inspection only -- recalibrate_pmsms_mz/recalibrate_precursors already
+    (inspection only -- fit_fragment_mz/fit_precursor_mz already
     apply the model themselves, nothing downstream reads this back in)."""
 
     filename = "mz_model"
 
 
+class FragmentShiftPpm(MmappetDataset):
+    """Each search precursor's `fragment_shift_ppm` (`bias + f_rt(rt)`, from
+    fit_fragment_mz): SAGE divides its fragment m/z by `1 + fragment_shift_ppm·1e-6`."""
+
+    filename = "fragment_shift_ppm.mmappet"
+
+
+class CorrectedMz(MmappetDataset):
+    filename = "corrected_mz.mmappet"
+
+
+class CorrectedRt(MmappetDataset):
+    filename = "corrected_rt.mmappet"
+
+
+class CorrectedIim(MmappetDataset):
+    filename = "corrected_inv_ion_mobility.mmappet"
+
+
 class RecalibratedPrecursors(TofFilteredPrecursors):
-    """search_precursors with `mz` corrected by recalibrate_precursors's own
-    fitted model -- accepted wherever TofFilteredPrecursors (or, transitively,
-    PreSageFilteredPrecursors) is, e.g. run_sage's final-pass `precursors` input."""
+    """search_precursors with update_precursors' columns set: each a one-column
+    dataset above, row-aligned and evaluated on the raw search_precursors."""
 
     filename = "recalibrated_precursors.mmappet"
 
@@ -385,44 +395,29 @@ class PredictedRt(MmappetDataset):
     filename = "predicted_rt.mmappet"
 
 
-class Speclib(NodeType):
-    """A user-provided SPECLIB (format 3), symlinked in by `check_speclib`."""
+class SpeclibFragments(NodeType):
+    """A SPECLIB fragments part: `index.mmappet` + `arrays.mmappet`."""
 
-    filename = "speclib"
+    filename = "speclib_fragments"
 
 
-class NoPrediction(NodeType):
-    """Zero-cost sentinel standing in for `RtTolerance`/`MobilityTolerance`
-    when that dimension isn't active (`[recalibration.rt]`/
-    `[recalibration.iim]` absent, 2026-08-25 -- see `ionmaiden_pipeline`).
-    `update_sage_config_rt_iim` always takes both RT and IIM
-    `rt_tolerance`/`mobility_tolerance` params (plain required `NodeType`s,
-    not mixed Node/`None`); this stands in for whichever one wasn't
-    computed. `run_sage`'s `predicted_rt` used to need this too
-    (`run_sage_with_predicted`, before necroflow's "mixed Node/value inputs"
-    support) but no longer does -- `run_sage` now takes a true
-    `PredictedRt | None`, no sentinel required (2026-08-26). Only
-    `update_sage_config_rt_iim`'s inputs still need this sentinel -- out of scope
-    for that merge, see `run_sage`'s docstring.
-    (necroflow *does* support skipping a rule entirely via plain `if/else`
-    branching in the workflow -- see its `docs/rules.md`'s
-    "Conditional pipelines" -- but here RT/IIM are independently optional,
-    so properly avoiding this sentinel too would mean up to 3 separate
-    `update_sage_config_rt_iim` rule variants instead of one with a
-    Python-callback command; not done yet, see
-    plans/rt_iim_independent_dimensions.md.) A `@text_file` rule with zero
-    `NodeType` inputs and a fixed literal `text` default -- same
-    fingerprint every time, so it materializes once and every call site
-    reuses the same node."""
+class SpeclibRt(NodeType):
+    """A SPECLIB retention_time part: `rt.mmappet`, one predicted HI per peptide row."""
 
-    filename = "no_prediction.marker"
+    filename = "speclib_rt"
+
+
+class SpeclibIim(NodeType):
+    """A SPECLIB inverse_ion_mobility part: `iim.mmappet`, SAGE's `--predicted-iim`."""
+
+    filename = "speclib_iim"
 
 
 class RtTolerance(NodeType):
     """rt_tol_sec tolerance JSON (`ValueTolSpline`-shaped, wrapped as
     `{"rt_tol_sec": {...}}` -- see `feature_prediction.tolerance
     .write_value_tol_spline_json`). Produced by both `predict_rt`
-    (pre-correction) and `correct_precursors_rt` (post-correction,
+    (pre-correction) and `fit_precursor_rt` (post-correction,
     tighter, the one actually fed to SAGE1 when RT correction runs)."""
 
     filename = "rt_tolerance.json"
@@ -430,7 +425,7 @@ class RtTolerance(NodeType):
 
 class MobilityTolerance(NodeType):
     """Same as `RtTolerance`, for `mobility_tol`/IIM. Produced by both
-    `predict_iim` and `correct_precursors_iim`."""
+    `predict_iim` and `fit_precursor_iim`."""
 
     filename = "mobility_tolerance.json"
 
@@ -441,33 +436,6 @@ class RtFitPlot(Png):
 
 class IimFitPlot(Png):
     filename = "iim_fit.png"
-
-
-class RtCorrectedPrecursors(RecalibratedPrecursors):
-    """RecalibratedPrecursors (mz-corrected) with `rt` also corrected by
-    `feature_prediction.precursor_correction.correct_precursors_rt` --
-    `inv_ion_mobility` untouched. Accepted wherever RecalibratedPrecursors
-    is, including `correct_precursors_iim`'s own `mz_corrected_precursors`
-    input when both dimensions are active (chained, not recombined -- see
-    plans/rt_iim_independent_dimensions.md)."""
-
-    filename = "rt_corrected_precursors.mmappet"
-
-
-class RtIimCorrectedPrecursors(RecalibratedPrecursors):
-    """RecalibratedPrecursors (mz-corrected, optionally already rt-corrected
-    via `RtCorrectedPrecursors` when both dimensions are active) with
-    `inv_ion_mobility` also corrected by
-    `feature_prediction.precursor_correction.correct_precursors_iim` --
-    accepted wherever RecalibratedPrecursors (or, transitively,
-    TofFilteredPrecursors/PreSageFilteredPrecursors) is, e.g. run_sage's
-    final-pass `precursors` input in mode 3. Name kept from the pre-split
-    design (the "final, however-corrected precursors" type) -- whether
-    `rt` was actually corrected too depends on which precursors table was
-    fed in as `mz_corrected_precursors`, not on this type alone. See
-    plans/better_sage_filtering.md's B.6."""
-
-    filename = "rt_iim_corrected_precursors.mmappet"
 
 
 class PrecursorCorrectionRtModel(NodeType):
@@ -900,10 +868,10 @@ def write_recalibration_config(text: str):
 
 @command(
     "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments}"
-    " {tof2mz} {precursors} {output_precursors} {recalibrated_tof2mz} {tolerance} {plot}"
+    " {tof2mz} {precursors} {fragment_shift_ppm} {recalibrated_tof2mz} {tolerance} {plot}"
     " --config {config} --fdr {fdr}",
 )
-def recalibrate_pmsms_mz(
+def fit_fragment_mz(
     sage_results_tsv: SageResultsTsv,
     matched_fragments: SageMatchedFragments,
     tof2mz: Tof2MzTable,
@@ -911,29 +879,29 @@ def recalibrate_pmsms_mz(
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    output_precursors = output(FragmentShiftedPrecursors)
+    fragment_shift_ppm = output(FragmentShiftPpm)
     recalibrated_tof2mz = output(RecalibratedTof2MzTable)
     tolerance = output(FragmentTolerance)
     plot = output(Png)
-    return output_precursors, recalibrated_tof2mz, tolerance, plot
+    return fragment_shift_ppm, recalibrated_tof2mz, tolerance, plot
 
 
 @command(
     "venvs/common/bin/recalibrate-precursors {sage_results_tsv} {precursors}"
-    " {output_precursors} {tolerance} {plot} {model} --config {config} --fdr {fdr}",
+    " {mz} {tolerance} {plot} {model} --config {config} --fdr {fdr}",
     threads=CORES,
 )
-def recalibrate_precursors(
+def fit_precursor_mz(
     sage_results_tsv: SageResultsTsv,
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    output_precursors = output(RecalibratedPrecursors)
+    mz = output(CorrectedMz)
     tolerance = output(PrecursorTolerance)
     plot = output(Png)
     model = output(SerializedMzModel)
-    return output_precursors, tolerance, plot, model
+    return mz, tolerance, plot, model
 
 
 @command(
@@ -952,23 +920,6 @@ def plot_recalibrated_ppm(
 ):
     plot = output(RecalibratedPpmPlot)
     return plot
-
-
-@command(
-    ".venv/bin/python -m necroflow.tools.config_set"
-    " {sage_config} {workdir}/precursor_tol_updated.json"
-    " --target precursor_tol.ppm --source {precursor_tolerance} --source-field ppm"
-    " && .venv/bin/python -m necroflow.tools.config_set"
-    " {workdir}/precursor_tol_updated.json {recalibrated_sage_config}"
-    " --target fragment_tol.ppm --source {fragment_tolerance} --source-field ppm"
-)
-def update_sage_config(
-    sage_config: SageConfig,
-    precursor_tolerance: PrecursorTolerance,
-    fragment_tolerance: FragmentTolerance,
-):
-    recalibrated_sage_config = output(SageConfig)
-    return recalibrated_sage_config
 
 
 @text_file
@@ -996,60 +947,54 @@ def dump_compact_peptides(
     return compact_peptides
 
 
-_SPECLIB_FORMAT_VERSION = 3
-
-
 def _json_text(obj) -> str:
     """A JSON file's text: sorted keys, indented, ending with a newline."""
     return json.dumps(obj, sort_keys=True, indent=2) + "\n"
 
 
-def _read_speclib_manifest(path: str) -> dict:
-    manifest_path = Path(path) / "manifest.json"
-    if not manifest_path.exists():
-        raise ValueError(f"[speclib] path {path!r} has no manifest.json")
-    manifest = json.loads(manifest_path.read_text())
-    if manifest.get("format_version") != _SPECLIB_FORMAT_VERSION:
-        raise ValueError(
-            f"SPECLIB {path} is format version {manifest.get('format_version')!r}, the "
-            f"pipeline reads {_SPECLIB_FORMAT_VERSION}: regenerate it with "
-            "feature-prediction-make-speclib"
-        )
-    return manifest
-
-
-def _sage_searches_sliced(sage) -> bool:
-    """Whether SAGE runs its sliced search for this `[sage]` config: `database.sliced`
-    when set, else unless `database.prefilter`, `wide_window` or `chimera` is set (the
-    rule of `Input::build`, git/sage `crates/sage-cli/src/input.rs`)."""
-    database = sage.get("database", {})
-    if "sliced" in database:
-        return bool(database["sliced"])
-    monolithic_only = (
-        database.get("prefilter", False),
-        sage.get("wide_window", False),
-        sage.get("chimera", False),
-    )
-    return not any(monolithic_only)
-
-
-@command(
-    "venvs/featureprediction/bin/feature-prediction-check-speclib"
-    " {compact_peptides} {path} --min-charge {min_charge} --max-charge {max_charge}"
-    " --require={require}"
-    " && ln -s $(realpath {path}) {speclib}"
+# A SPECLIB part reflinked from the job's store into its own node, then checked against the
+# peptide table and the search's charges.
+_SOURCE_SPECLIB_PART = (
+    "cp -r --reflink=always {store}/%(part)s/{name} {%(output)s}"
+    " && venvs/featureprediction/bin/feature-prediction-check-speclib {compact_peptides} {%(output)s}"
+    " --part %(part)s --min-charge {min_charge} --max-charge {max_charge}"
 )
-def check_speclib(
+
+
+@command(_SOURCE_SPECLIB_PART % {"part": "fragments", "output": "fragments"})
+def source_speclib_fragments(
     compact_peptides: CompactPeptidesTable,
-    path: str,
+    store: str,
+    name: str,
     min_charge: int,
     max_charge: int,
-    require: str,
 ):
-    """Check the SPECLIB at `path` against this job's peptide table, precursor charges
-    and the parts it uses (`require`), then symlink it in."""
-    speclib = output(Speclib)
-    return speclib
+    fragments = output(SpeclibFragments)
+    return fragments
+
+
+@command(_SOURCE_SPECLIB_PART % {"part": "retention_time", "output": "rt"})
+def source_speclib_rt(
+    compact_peptides: CompactPeptidesTable,
+    store: str,
+    name: str,
+    min_charge: int,
+    max_charge: int,
+):
+    rt = output(SpeclibRt)
+    return rt
+
+
+@command(_SOURCE_SPECLIB_PART % {"part": "inverse_ion_mobility", "output": "iim"})
+def source_speclib_iim(
+    compact_peptides: CompactPeptidesTable,
+    store: str,
+    name: str,
+    min_charge: int,
+    max_charge: int,
+):
+    iim = output(SpeclibIim)
+    return iim
 
 
 def _fdr_levels_record_flags(args: CommandArgs, tool_command: str) -> str:
@@ -1068,19 +1013,7 @@ def _fdr_levels_record_flags(args: CommandArgs, tool_command: str) -> str:
 
 
 def _run_sage_command(args: CommandArgs) -> str:
-    """Python command callback, not a static template -- lets
-    `--predicted-rt`/`--predicted-iim` be added independently, purely by
-    whether `predicted_rt`/`predicted_iim` resolved to a real Node or the
-    mixed Node/`None` input's `None` default (necroflow's "mixed Node/value
-    inputs" support, added 2026-08-21) -- `args.inputs.*` preserves a plain
-    `None` verbatim (only managed Nodes resolve to `Path`), so this needs
-    neither a separate `dimensions` scalar nor the `NoPrediction` sentinel
-    `run_sage_with_predicted` used to require just to keep the parameter a
-    real DAG edge. One rule now covers pass-1/mode-1/mode-2 (neither
-    prediction) and mode 3's final pass (either/both), replacing the
-    previous `run_sage`/`run_sage_with_predicted` split. See
-    plans/rt_iim_independent_dimensions.md for the split this undoes.
-    """
+    """Sliced SAGE search; each prediction input adds its flag when given."""
     sage_binary = shlex.quote(str(args.inputs.sage_binary))
     fasta = shlex.quote(str(args.inputs.fasta))
     reads_raw_ms2 = Path(args.inputs.pmsms).name == Ms2Events.filename
@@ -1097,19 +1030,20 @@ def _run_sage_command(args: CommandArgs) -> str:
     matched_fragments = shlex.quote(str(args.outputs.matched_fragments))
     fdr_levels = shlex.quote(str(args.outputs.fdr_levels))
 
-    flags = f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
-    if args.inputs.compact_peptides is not None:
-        flags += f" --compact-peptides {shlex.quote(str(args.inputs.compact_peptides))}"
+    flags = (
+        f" --tof2mz {shlex.quote(str(args.inputs.tof2mz))}"
+        f" --compact-peptides {shlex.quote(str(args.inputs.compact_peptides))}"
+    )
     if args.inputs.predicted_rt is not None:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
-    if args.config.speclib_iim:
-        iim = Path(args.inputs.speclib) / "iim.mmappet"
+    if args.inputs.predicted_iim is not None:
+        iim = Path(args.inputs.predicted_iim) / "iim.mmappet"
         flags += f" --predicted-iim {shlex.quote(str(iim))}"
-    if args.config.speclib_fragments:
-        speclib = Path(args.inputs.speclib)
+    if args.inputs.speclib_fragments is not None:
+        fragments = Path(args.inputs.speclib_fragments)
         flags += (
-            f" --predicted-fragment-intensity-index {shlex.quote(str(speclib / 'index.mmappet'))}"
-            f" --predicted-fragment-intensity-cache {shlex.quote(str(speclib / 'arrays.mmappet'))}"
+            f" --predicted-fragment-intensity-index {shlex.quote(str(fragments / 'index.mmappet'))}"
+            f" --predicted-fragment-intensity-cache {shlex.quote(str(fragments / 'arrays.mmappet'))}"
         )
 
     sage = (
@@ -1134,21 +1068,16 @@ def run_sage(
     sage_config: SageConfig,
     sage_binary: SageBinary,
     tof2mz: Tof2MzTable,
+    compact_peptides: CompactPeptidesTable,
     predicted_rt: PredictedRt | None = None,
-    compact_peptides: CompactPeptidesTable | None = None,
-    speclib: Speclib | None = None,
-    speclib_fragments: bool = False,
-    speclib_iim: bool = False,
+    predicted_iim: SpeclibIim | None = None,
+    speclib_fragments: SpeclibFragments | None = None,
 ):
-    """Run Sage. `predicted_rt` and `speclib` are optional (mixed Node/`None`
-    inputs) -- omitted for pass-1 and mode 1/2's plain search. `speclib`
-    (`check_speclib`'s output) is the only source of predicted fragment intensities
-    (`speclib_fragments`: its `index.mmappet` + `arrays.mmappet`, feature-only, the
-    `ms2_*` scoring columns, no hard eviction -- see
-    `git/sage/docs/ai/predicted_fragment_intensity.md`) and of predicted IIM
-    (`speclib_iim`: its `iim.mmappet` as `--predicted-iim`). `sage_config` must
+    """Run Sage. The predictions are optional (mixed Node/`None` inputs) -- omitted for
+    pass-1 and mode 1/2's plain search; `speclib_fragments` gives the `ms2_*` scoring
+    columns, feature-only. `sage_config` must
     already carry `rt_tol_sec`+`rt_sigma_sec` and/or `mobility_tol`+`iim_sigma` for
-    whichever of RT/IIM is passed here (`update_sage_config_rt_iim`), same
+    whichever of RT/IIM is passed here (`update_sage_config`), same
     requirement `Input::build()` enforces Rust-side. See
     plans/better_sage_filtering.md's B.4-B.6 and
     plans/rt_iim_independent_dimensions.md.
@@ -1158,7 +1087,7 @@ def run_sage(
     `<events.ms2>/data.mmappet` with `precursors` addressing its spectra (e.g.
     `top_cell_precursors`). For the recalibrated final search `tof2mz` is a
     RecalibratedTof2MzTable and `precursors` carry `fragment_shift_ppm`
-    (FragmentShiftedPrecursors, or a table derived from it), which Sage applies
+    (RecalibratedPrecursors, from update_precursors), which Sage applies
     whenever the column is present. See plans/fragment_mz_corrected_tof2mz_table.md.
 
     `fdr_levels` holds the confident spectra, peptidoforms and ions at 1% FDR
@@ -1172,23 +1101,15 @@ def run_sage(
     return results_json, results_pin, results_tsv, matched_fragments, fdr_levels
 
 
-@text_file
-def write_no_prediction_marker(text: str):
-    marker = output(NoPrediction)
-    return marker
-
-
-_NO_PREDICTION_TEXT = "no prediction requested for this dimension\n"
-
 @command(
     "venvs/featureprediction/bin/feature-prediction-generate-rt"
-    " {speclib} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
+    " {speclib_rt} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
 def predict_rt(
-    speclib: Speclib,
+    speclib_rt: SpeclibRt,
     sage_results_tsv: SageResultsTsv,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
@@ -1205,13 +1126,13 @@ def predict_rt(
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-generate-iim"
-    " {speclib} {sage_results_tsv} {mobility_tolerance} {plot}"
+    " {speclib_iim} {sage_results_tsv} {mobility_tolerance} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
 def predict_iim(
-    speclib: Speclib,
+    speclib_iim: SpeclibIim,
     sage_results_tsv: SageResultsTsv,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
@@ -1227,135 +1148,115 @@ def predict_iim(
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-rt"
-    " {sage_results_tsv} {predicted_rt} {mz_corrected_precursors}"
-    " {output_precursors} {rt_tolerance} {rt_model} {plot}"
+    " {sage_results_tsv} {predicted_rt} {precursors}"
+    " {rt} {rt_tolerance} {rt_model} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
-def correct_precursors_rt(
+def fit_precursor_rt(
     sage_results_tsv: SageResultsTsv,
     predicted_rt: PredictedRt,
-    mz_corrected_precursors: RecalibratedPrecursors,
+    precursors: PreSageFilteredPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
     fdr: int | float,
 ):
-    output_precursors = output(RtCorrectedPrecursors)
+    rt = output(CorrectedRt)
     rt_tolerance = output(RtTolerance)
     rt_model = output(PrecursorCorrectionRtModel)
     plot = output(PrecursorCorrectionRtFitPlot)
-    return output_precursors, rt_tolerance, rt_model, plot
+    return rt, rt_tolerance, rt_model, plot
 
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-iim"
-    " {sage_results_tsv} {speclib} {mz_corrected_precursors}"
-    " {output_precursors} {mobility_tolerance} {iim_models} {plot}"
+    " {sage_results_tsv} {speclib_iim} {precursors}"
+    " {inv_ion_mobility} {mobility_tolerance} {iim_models} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
-def correct_precursors_iim(
+def fit_precursor_iim(
     sage_results_tsv: SageResultsTsv,
-    speclib: Speclib,
-    mz_corrected_precursors: RecalibratedPrecursors,
+    speclib_iim: SpeclibIim,
+    precursors: PreSageFilteredPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
     fdr: int | float,
 ):
-    """`mz_corrected_precursors` accepts a plain `RecalibratedPrecursors`
-    (IIM-only mode) or an `RtCorrectedPrecursors` (both dimensions active,
-    chained -- `RtCorrectedPrecursors` is a `RecalibratedPrecursors`
-    subclass, satisfies this contract either way). See
-    plans/rt_iim_independent_dimensions.md."""
-    output_precursors = output(RtIimCorrectedPrecursors)
+    inv_ion_mobility = output(CorrectedIim)
     mobility_tolerance = output(MobilityTolerance)
     iim_models = output(PrecursorCorrectionIimModels)
     plot = output(PrecursorCorrectionIimFitPlot)
-    return output_precursors, mobility_tolerance, iim_models, plot
+    return inv_ion_mobility, mobility_tolerance, iim_models, plot
 
 
-def _update_sage_config_rt_iim_command(args: CommandArgs) -> str:
-    """Python command callback -- chains 0, 2, or 4 `config_set` calls
-    based on `args.config.dimensions` (RT/IIM independently optional).
-    Unlike `run_sage` (which now takes `predicted_rt`/`predicted_iim` as
-    true mixed Node/`None` inputs, no sentinel needed), `rt_tolerance`/
-    `mobility_tolerance` here are still always real DAG edges (resolve to
-    the `NoPrediction` sentinel when inactive) -- out of scope for the
-    2026-08-26 `run_sage` merge, see that function's docstring. Only the active
-    dimension's `config_set` calls actually run -- decided by the scalar
-    `dimensions` config, never by inspecting file content. In practice
-    `dimensions` is never empty here (the workflow only calls this
-    rule inside `if "rt" in cfg.recalibration or "iim" in cfg.recalibration:`,
-    which always sets at least one dimension), but a plain copy-through is
-    a safe fallback.
-
-    Each active dimension contributes *two* steps, not one: `rt_tol_sec`/
-    `mobility_tol` (the hard-eviction window) and `rt_sigma_sec`/`iim_sigma`
-    (the LDA/ranking z² scale) -- both read from the same `rt_tolerance`/
-    `mobility_tolerance` artifact (`git/featureprediction`'s
-    `correct_precursors_rt`/`correct_precursors_iim` write them as sibling
-    top-level keys in one file, see that repo's `AI.md`), since SAGE's
-    `Input::build` rejects `predicted_rt`/`rt_tol_sec` being set without
-    `rt_sigma_sec` (and vice versa for IIM) -- see `plans/lda_external_rt_iim_features.md`.
-    """
-    sage_config = shlex.quote(str(args.inputs.sage_config))
-    recalibrated_sage_config = shlex.quote(str(args.outputs.recalibrated_sage_config))
-    dimensions = set(args.config.dimensions)
-
-    current = sage_config
+def _update_sage_config_command(args: CommandArgs) -> str:
+    """Patches every given tolerance into `sage_config` with `config_set`."""
+    inputs = args.inputs
+    patches = [
+        ("precursor_tol.ppm", inputs.precursor_tolerance, "ppm"),
+        ("fragment_tol.ppm", inputs.fragment_tolerance, "ppm"),
+        ("rt_tol_sec", inputs.rt_tolerance, "rt_tol_sec"),
+        ("rt_sigma_sec", inputs.rt_tolerance, "rt_sigma_sec"),
+        ("mobility_tol", inputs.mobility_tolerance, "mobility_tol"),
+        ("iim_sigma", inputs.mobility_tolerance, "iim_sigma"),
+    ]
+    current = shlex.quote(str(inputs.sage_config))
     steps = []
-    if "rt" in dimensions:
-        rt_tolerance = shlex.quote(str(args.inputs.rt_tolerance))
-        tol_out = shlex.quote(str(args.workdir / "rt_tol_updated.json"))
+    for target, source, field in patches:
+        if source is None:
+            continue
+        patched = shlex.quote(str(args.workdir / f"{target}.json"))
         steps.append(
-            f".venv/bin/python -m necroflow.tools.config_set {current} {tol_out}"
-            f" --target rt_tol_sec --source {rt_tolerance} --source-field rt_tol_sec"
+            f".venv/bin/python -m necroflow.tools.config_set {current} {patched}"
+            f" --target {target} --source {shlex.quote(str(source))}"
+            f" --source-field {field}"
         )
-        current = tol_out
-        sigma_out = shlex.quote(str(args.workdir / "rt_sigma_updated.json"))
-        steps.append(
-            f".venv/bin/python -m necroflow.tools.config_set {current} {sigma_out}"
-            f" --target rt_sigma_sec --source {rt_tolerance} --source-field rt_sigma_sec"
-        )
-        current = sigma_out
-    if "iim" in dimensions:
-        mobility_tolerance = shlex.quote(str(args.inputs.mobility_tolerance))
-        tol_out = shlex.quote(str(args.workdir / "mobility_tol_updated.json"))
-        steps.append(
-            f".venv/bin/python -m necroflow.tools.config_set {current} {tol_out}"
-            f" --target mobility_tol --source {mobility_tolerance} --source-field mobility_tol"
-        )
-        current = tol_out
-        steps.append(
-            f".venv/bin/python -m necroflow.tools.config_set {current} {recalibrated_sage_config}"
-            f" --target iim_sigma --source {mobility_tolerance} --source-field iim_sigma"
-        )
-        current = recalibrated_sage_config
-    if current != recalibrated_sage_config:
-        steps.append(f"cp {current} {recalibrated_sage_config}")
+        current = patched
+    recalibrated_sage_config = shlex.quote(str(args.outputs.recalibrated_sage_config))
+    steps.append(f"cp {current} {recalibrated_sage_config}")
     return " && ".join(steps)
 
 
-@command(_update_sage_config_rt_iim_command)
-def update_sage_config_rt_iim(
+@command(_update_sage_config_command)
+def update_sage_config(
     sage_config: SageConfig,
-    rt_tolerance: RtTolerance | NoPrediction,
-    mobility_tolerance: MobilityTolerance | NoPrediction,
-    dimensions: tuple[str, ...],
+    precursor_tolerance: PrecursorTolerance | None = None,
+    fragment_tolerance: FragmentTolerance | None = None,
+    rt_tolerance: RtTolerance | None = None,
+    mobility_tolerance: MobilityTolerance | None = None,
 ):
-    """Chains onto `update_sage_config`'s output (mz's `precursor_tol`/
-    `fragment_tol` already patched) -- `sage_config` here is that rule's
-    `recalibrated_sage_config`, not the plain `write_sage_config` output.
-    `--predicted-rt`/`--predicted-iim` themselves are *not* set here: like
-    `--pmsms`/`--precursors`/`-f {fasta}`, they're path-valued overrides
-    passed directly as CLI flags (`run_sage`), not embedded into the
-    config JSON via `config_set`."""
     recalibrated_sage_config = output(SageConfig)
     return recalibrated_sage_config
+
+
+def _update_precursors_command(args: CommandArgs) -> str:
+    inputs = args.inputs
+    columns = (inputs.fragment_shift_ppm, inputs.mz, inputs.rt, inputs.inv_ion_mobility)
+    return shlex.join(
+        [
+            "venvs/common/bin/update-precursors",
+            str(inputs.precursors),
+            str(args.outputs.recalibrated_precursors),
+            *(str(column) for column in columns if column is not None),
+        ]
+    )
+
+
+@command(_update_precursors_command)
+def update_precursors(
+    precursors: PreSageFilteredPrecursors,
+    fragment_shift_ppm: FragmentShiftPpm | None = None,
+    mz: CorrectedMz | None = None,
+    rt: CorrectedRt | None = None,
+    inv_ion_mobility: CorrectedIim | None = None,
+):
+    recalibrated_precursors = output(RecalibratedPrecursors)
+    return recalibrated_precursors
 
 
 def _mokapot_command(args: CommandArgs) -> str:
@@ -1695,10 +1596,13 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         filter=cfg.precursor_filters.pre_sage.get("filter", ""),
     )
 
-    # Neighbor Graph
-    if "precursor_neighbors" in cfg:
+    # Score competition: each precursor's ToF scores against its neighbors'
+    if "score_competition" in cfg:
+        neighbors = {
+            k: v for k, v in cfg.score_competition.items() if k != "score_margin"
+        }
         P.precursor_neighbors_config = write_precursor_neighbors_config(
-            text=tomlkit.dumps(cfg.precursor_neighbors)
+            text=tomlkit.dumps(neighbors)
         )
         P.precursor_grid_index = build_precursor_grid_index(
             P.pre_sage_filtered_precursors,
@@ -1710,22 +1614,12 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.tdf,
             P.precursor_neighbors_config,
         )
-    elif "tof_score_filter" in cfg:
-        raise ValueError(
-            "[tof_score_filter] is configured but [precursor_neighbors] is not -- "
-            "ToF Score Filtering requires a neighbor graph. Add [precursor_neighbors] "
-            "or remove [tof_score_filter]."
-        )
-
-    # ToF Score Filtering
-    if "tof_score_filter" in cfg:
         P.neighbor_score = tof_score_filter(P.pmsms, P.precursor_neighbors_csr)
-
         P.search_pmsms, P.search_precursors = materialize_tof_filtered_pmsms(
             P.pmsms,
             P.pre_sage_filtered_precursors,
             P.neighbor_score,
-            score_margin=cfg.tof_score_filter.score_margin,
+            score_margin=cfg.score_competition.score_margin,
         )
     else:
         P.search_pmsms = P.pmsms
@@ -1738,9 +1632,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # Search
 
     if "sage" in cfg:
-        P.sage_config = write_sage_config(
-            text=_json_text(cfg.sage)
-        )
+        P.sage_config = write_sage_config(text=_json_text(cfg.sage))
 
         database = cfg.sage.database
         dump_peptides_database = {
@@ -1759,47 +1651,22 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.compact_peptides = dump_compact_peptides(
             P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
-        _compact_peptides = (
-            P.compact_peptides if _sage_searches_sliced(cfg.sage) else None
+
+        speclib = cfg.get("speclib", {})
+        min_charge, max_charge = cfg.sage.get("precursor_charge", (2, 4))
+        part = dict(
+            store=speclib.get("path"), min_charge=min_charge, max_charge=max_charge
         )
 
-        if "fragment_intensity" in cfg:
-            raise ValueError(
-                "[fragment_intensity] is gone: give the job a SPECLIB with [speclib] "
-                'path = "speclibs/<name>" (make one with feature-prediction-make-speclib)'
-            )
-        uses_rt = "rt" in cfg.get("recalibration", {})
-        uses_iim = "iim" in cfg.get("recalibration", {})
-        if "speclib" in cfg:
-            manifest = _read_speclib_manifest(cfg.speclib.path)
-            uses_fragments = cfg.speclib.get("use_fragment_predictions", "fragments" in manifest)
-        elif uses_rt or uses_iim:
-            raise ValueError(
-                "[recalibration.rt]/[recalibration.iim] take their predictions from a SPECLIB: "
-                'add [speclib] path = "speclibs/<name>"'
-            )
-        else:
-            uses_fragments = False
-
-        if uses_fragments or uses_rt or uses_iim:
-            min_charge, max_charge = cfg.sage.get("precursor_charge", (2, 4))
-            used_parts = (
-                ("fragments", uses_fragments),
-                ("retention_time", uses_rt),
-                ("inverse_ion_mobility", uses_iim),
-            )
-            P.speclib = check_speclib(
+        speclib_fragments = (
+            source_speclib_fragments(
                 P.compact_peptides,
-                path=cfg.speclib.path,
-                min_charge=min_charge,
-                max_charge=max_charge,
-                require=",".join(part for part, used in used_parts if used),
+                name=speclib["fragments"],
+                **part,
             )
-        final_pass_speclib = {
-            "speclib": P.speclib if uses_fragments or uses_iim else None,
-            "speclib_fragments": uses_fragments,
-            "speclib_iim": uses_iim,
-        }
+            if "fragments" in speclib
+            else None
+        )
 
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
@@ -1836,56 +1703,44 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_config,
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
-                compact_peptides=_compact_peptides,
+                compact_peptides=P.compact_peptides,
             )
-            P.recalibration_config = write_recalibration_config(
-                text=tomlkit.dumps(cfg.recalibration)
-            )
-            (
-                P.fragment_shifted_precursors,
-                P.recalibrated_tof2mz_table,
-                P.fragment_mz_search_tolerance,
-                P.fragment_mz_recalibration_fit_plot,
-            ) = recalibrate_pmsms_mz(
-                P.filtered_sage_results_tsv,
-                P.filtered_sage_matched_fragments,
-                P.tof2mz_table,
-                P.search_precursors,
-                P.recalibration_config,
-                fdr=cfg.sage_summarize.fdr,
-            )
-            # `fragment_shift_ppm` rides from here through every later precursor
-            # rewrite (m/z, RT, IIM) into the final search's precursors.
-            (
-                P.recalibrated_precursors,
-                P.precursor_mz_search_tolerance,
-                P.precursor_mz_recalibration_fit_plot,
-                P.precursro_mz_recalibration_model_serialization,
-            ) = recalibrate_precursors(
-                P.filtered_sage_results_tsv,
-                P.fragment_shifted_precursors,
-                P.recalibration_config,
-                fdr=cfg.sage_summarize.fdr,
-            )
-            P.recalibrated_sage_config = update_sage_config(
-                P.sage_config,
-                P.precursor_mz_search_tolerance,
-                P.fragment_mz_search_tolerance,
-            )
-
-            # RT and IIM are independent, sibling optional steps, each gated
-            # purely on its own `[recalibration.rt]`/`.iim]` table presence
-            # (2026-08-25 rationale -- mirrors mz's own `"recalibration" in
-            # cfg` pattern, no separate flag needed; see
-            # plans/rt_iim_independent_dimensions.md). `dimensions` may end
-            # up empty (neither active -- previously called "mode 2") --
-            # `update_sage_config_rt_iim` below tolerates that as a
-            # documented safe copy-through (its own command builder's
-            # docstring), so mz-only and RT/IIM-active jobs share the same
-            # single final `run_sage` call below instead of two
-            # near-duplicate branches (2026-09-0x flattening; original
-            # two-branch design: plans/better_sage_filtering.md's B.6).
-            dimensions = tuple(d for d in ("rt", "iim") if d in cfg.recalibration)
+            corrections = {}  # update_precursors' columns
+            tolerances = {}  # update_sage_config's tolerances
+            if "mz" in cfg.recalibration:
+                P.recalibration_config = write_recalibration_config(
+                    text=tomlkit.dumps(cfg.recalibration.mz)
+                )
+                (
+                    P.fragment_shift_ppm,
+                    P.recalibrated_tof2mz_table,
+                    P.fragment_mz_search_tolerance,
+                    P.fragment_mz_recalibration_fit_plot,
+                ) = fit_fragment_mz(
+                    P.filtered_sage_results_tsv,
+                    P.filtered_sage_matched_fragments,
+                    P.tof2mz_table,
+                    P.search_precursors,
+                    P.recalibration_config,
+                    fdr=cfg.sage_summarize.fdr,
+                )
+                (
+                    P.corrected_mz,
+                    P.precursor_mz_search_tolerance,
+                    P.precursor_mz_recalibration_fit_plot,
+                    P.precursro_mz_recalibration_model_serialization,
+                ) = fit_precursor_mz(
+                    P.filtered_sage_results_tsv,
+                    P.search_precursors,
+                    P.recalibration_config,
+                    fdr=cfg.sage_summarize.fdr,
+                )
+                corrections.update(fragment_shift_ppm=P.fragment_shift_ppm, mz=P.corrected_mz)
+                tolerances.update(
+                    precursor_tolerance=P.precursor_mz_search_tolerance,
+                    fragment_tolerance=P.fragment_mz_search_tolerance,
+                )
+                current_tof2mz_table = P.recalibrated_tof2mz_table
 
             # tolerance_percentiles/tolerance_method: required explicitly in
             # `[recalibration.rt]`/`[recalibration.iim]` (separate tables,
@@ -1893,12 +1748,10 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             # (mz-scoped) `[recalibration.mz]` value; each of the three
             # dimensions (mz, rt, iim) gets its own percentiles/method. See
             # `git/featureprediction`'s `tolerance.select_tolerance`.
-            precursor_correction_rt_tolerance = None
-            precursor_correction_mobility_tolerance = None
-            precursors_for_iim_correction = P.recalibrated_precursors
-            current_precursors = P.recalibrated_precursors
-
-            if "rt" in dimensions:
+            if "rt" in cfg.recalibration:
+                speclib_rt = source_speclib_rt(
+                    P.compact_peptides, name=speclib["retention_time"], **part
+                )
                 rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt[
                     "tolerance_percentiles"
                 ]
@@ -1906,7 +1759,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     "tolerance_method", "theoretic"
                 )
                 P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
-                    P.speclib,
+                    speclib_rt,
                     P.filtered_sage_results_tsv,
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
@@ -1914,29 +1767,27 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     fdr=cfg.sage_summarize.fdr,
                 )
                 (
-                    P.rt_corrected_precursors,
-                    precursor_correction_rt_tolerance,
+                    P.corrected_rt,
+                    tolerances["rt_tolerance"],
                     P.precursor_correction_rt_model,
                     P.precursor_correction_rt_fit_plot,
-                ) = correct_precursors_rt(
+                ) = fit_precursor_rt(
                     P.filtered_sage_results_tsv,
                     P.predicted_rt,
-                    P.recalibrated_precursors,
+                    P.search_precursors,
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
                     tolerance_method=rt_tolerance_method,
                     fdr=cfg.sage_summarize.fdr,
                 )
-                precursors_for_iim_correction = P.rt_corrected_precursors
-                current_precursors = P.rt_corrected_precursors
+                corrections["rt"] = P.corrected_rt
             else:
-                # Plain Python `None`, not a `NoPrediction` sentinel node --
-                # `run_sage`'s `predicted_rt` is a true mixed Node/`None`
-                # input, so there's no DAG edge to satisfy when this
-                # dimension is inactive.
                 P.predicted_rt = None
 
-            if "iim" in dimensions:
+            if "iim" in cfg.recalibration:
+                speclib_iim = source_speclib_iim(
+                    P.compact_peptides, name=speclib["inverse_ion_mobility"], **part
+                )
                 iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim[
                     "tolerance_percentiles"
                 ]
@@ -1944,7 +1795,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     "tolerance_method", "theoretic"
                 )
                 P.mobility_tolerance, P.iim_fit_plot = predict_iim(
-                    P.speclib,
+                    speclib_iim,
                     P.filtered_sage_results_tsv,
                     tolerance_lo=iim_tolerance_lo,
                     tolerance_hi=iim_tolerance_hi,
@@ -1952,38 +1803,26 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     fdr=cfg.sage_summarize.fdr,
                 )
                 (
-                    P.rt_iim_corrected_precursors,
-                    precursor_correction_mobility_tolerance,
+                    P.corrected_inv_ion_mobility,
+                    tolerances["mobility_tolerance"],
                     P.precursor_correction_iim_models,
                     P.precursor_correction_iim_fit_plot,
-                ) = correct_precursors_iim(
+                ) = fit_precursor_iim(
                     P.filtered_sage_results_tsv,
-                    P.speclib,
-                    precursors_for_iim_correction,
+                    speclib_iim,
+                    P.search_precursors,
                     tolerance_lo=iim_tolerance_lo,
                     tolerance_hi=iim_tolerance_hi,
                     tolerance_method=iim_tolerance_method,
                     fdr=cfg.sage_summarize.fdr,
                 )
-                current_precursors = P.rt_iim_corrected_precursors
+                corrections["inv_ion_mobility"] = P.corrected_inv_ion_mobility
+            else:
+                speclib_iim = None
 
-            P.precursor_correction_rt_tolerance = (
-                precursor_correction_rt_tolerance
-                if precursor_correction_rt_tolerance is not None
-                else write_no_prediction_marker(text=_NO_PREDICTION_TEXT)
-            )
-            P.precursor_correction_mobility_tolerance = (
-                precursor_correction_mobility_tolerance
-                if precursor_correction_mobility_tolerance is not None
-                else write_no_prediction_marker(text=_NO_PREDICTION_TEXT)
-            )
-
-            P.recalibrated_sage_config_rt_iim = update_sage_config_rt_iim(
-                P.recalibrated_sage_config,
-                P.precursor_correction_rt_tolerance,
-                P.precursor_correction_mobility_tolerance,
-                dimensions=dimensions,
-            )
+            P.recalibrated_precursors = update_precursors(P.search_precursors, **corrections)
+            current_precursors = P.recalibrated_precursors
+            P.recalibrated_sage_config = update_sage_config(P.sage_config, **tolerances)
             (
                 P.sage_results_json,
                 P.sage_results_pin,
@@ -1994,24 +1833,25 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.search_pmsms,
                 current_precursors,
                 P.fasta,
-                P.recalibrated_sage_config_rt_iim,
+                P.recalibrated_sage_config,
                 P.sage_binary,
-                tof2mz=P.recalibrated_tof2mz_table,
+                tof2mz=current_tof2mz_table,
                 predicted_rt=P.predicted_rt,
-                compact_peptides=_compact_peptides,
-                **final_pass_speclib,
+                predicted_iim=speclib_iim,
+                compact_peptides=P.compact_peptides,
+                speclib_fragments=speclib_fragments,
             )
 
-            P.recalibrated_ppm_plot = plot_recalibrated_ppm(
-                P.filtered_sage_results_tsv,
-                P.sage_results_tsv,
-                P.filtered_sage_matched_fragments,
-                P.sage_matched_fragments,
-                P.precursor_mz_search_tolerance,
-                P.fragment_mz_search_tolerance,
-                fdr=cfg.sage_summarize.fdr,
-            )
-            current_tof2mz_table = P.recalibrated_tof2mz_table
+            if "mz" in cfg.recalibration:
+                P.recalibrated_ppm_plot = plot_recalibrated_ppm(
+                    P.filtered_sage_results_tsv,
+                    P.sage_results_tsv,
+                    P.filtered_sage_matched_fragments,
+                    P.sage_matched_fragments,
+                    P.precursor_mz_search_tolerance,
+                    P.fragment_mz_search_tolerance,
+                    fdr=cfg.sage_summarize.fdr,
+                )
         else:
             (
                 P.sage_results_json,
@@ -2026,8 +1866,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_config,
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
-                compact_peptides=_compact_peptides,
-                **final_pass_speclib,
+                compact_peptides=P.compact_peptides,
+                speclib_fragments=speclib_fragments,
             )
 
         P.confident_psms = filter_sage_results(
@@ -2058,7 +1898,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     else "none"
                 ),
                 iim_source=(
-                    "external" if uses_iim else "none"
+                    "external" if "iim" in cfg.get("recalibration", {}) else "none"
                 ),
                 seed=mokapot_cfg.get("seed", 1),
                 xgboost_bagging_n_estimators=mokapot_cfg.get(
