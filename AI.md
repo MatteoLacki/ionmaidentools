@@ -70,11 +70,11 @@ measurements for each feature live in `docs/ai/`, one file per topic:
 |------|--------|
 | `docs/ai/ms1_ms2_extraction.md` | C++ MS1 extraction, compact/query-oriented MS2 benchmark targets |
 | `docs/ai/fragment_intensity.md` | Fragment-intensity `PredictionCache`, its export and `run_sage` wiring -- removed 2026-10-26; SPECLIB (`[speclib]`, `check_speclib`) is the only source now |
-| `docs/ai/recalibration_modes.md` | The three mz/RT/IIM recalibration modes, table-presence gating, tolerance percentiles/method, `server_url`, fragment m/z correction applied inside SAGE (`fragment_shift_ppm`) |
+| `docs/ai/recalibration_modes.md` | The three mz/RT/IIM recalibration modes, table-presence gating, tolerance percentiles/method, fragment m/z correction applied inside SAGE (`fragment_shift_ppm`) |
 | `docs/ai/run_sage_merge.md` | `run_sage`/`run_sage_with_predicted` merged into one mixed-Node/value rule |
 | `docs/ai/mokapot_integration.md` | Config-driven mokapot plugin, leakage-safe PIN filtering, real F9477 ablation-grid measurements |
 | `docs/ai/fdr_levels.md` | Spectra/peptidoforms/ions at 1% FDR as the last step of `run_sage`/`mokapot`, and recording runs in `$ION_MAIDEN_REGRESSION_DB` |
-| `docs/ai/rt_iim_caching.md` | `predict_rt`/`predict_iim`'s `PredictionCache` wiring, necroflow gotchas, measured payoff |
+| `docs/ai/rt_iim_caching.md` | `predict_rt`/`predict_iim`'s `PredictionCache` wiring, necroflow gotchas, measured payoff -- removed 2026-10-27; RT/IIM come from the SPECLIB (`[recalibration.rt]`/`.iim]` require its parts) |
 | `docs/ai/mapped_inputs.md` | `dump_compact_peptides`/`CompactPeptidesTable` for the sliced search, and the prediction nodes as mmappet datasets SAGE maps (2026-10-17) |
 | `docs/ai/bestrun.md` | `jobs/f9477_best.toml` — the standing best-known-config job, current numbers, and the ask-before-updating rule |
 

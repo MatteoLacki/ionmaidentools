@@ -146,32 +146,6 @@ no `fragment_model`/`precursor_model` sub-tables) that predates the current
 already fail against current code independent of this change — left
 untouched, not this change's problem to fix.
 
-## `server_url` (2026-08-25)
-
-`[recalibration.rt]`/`[recalibration.iim].server_url` — optional, either a
-plain string or a TOML array (`server_url = ["ip0:8500",
-"ip1:8500"]`, tried in that order, falling back on failure — see
-`git/featureprediction`'s `AI.md` for the fallback design). `_server_url_arg`
-(`pipelines.py`) normalizes either shape into the single comma-joined string
-`predict_rt`/`predict_iim`'s `--server-url` flag expects (`feature-prediction-
-generate-{rt,iim}` splits it back into a list), defaulting to
-`_DEFAULT_KOINA_SERVER_URL` — a literal duplicate of `koina_client
-.DEFAULT_SERVER_URL`'s value, since this repo shells out to a separate
-`venvs/featureprediction` install and can't import that package directly
-(same reasoning as `default_precursor_charge` duplicating SAGE's own
-compiled-in `(2, 4)`, just above). Unlike `tolerance_percentiles`/
-`tolerance_method`, `server_url` is *always* passed on the command line
-(the `@command` template has no conditional-flag mechanism for static
-templates), computed by Python first so the flag is never omitted, just
-resolves to the same default `koina_client` itself would use when the job
-config doesn't set it.
-
-`ssl`/`timeout`/`retries`/`backoff_factor` (see `git/featureprediction`'s
-`AI.md`) are **not** yet wired through `pipelines.py` — only `server_url`
-was added at the pipeline-config level so far; those four are available at
-the CLI/`feature_prediction.predict` config-dict level today, add them here
-the same way if a job actually needs to set one.
-
 ## Mode-2/mode-3 branches flattened into one (2026-09-0x)
 
 The `if "rt" in cfg.recalibration or "iim" in cfg.recalibration: <block>

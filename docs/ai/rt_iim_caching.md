@@ -1,5 +1,15 @@
 # `predict_rt`/`predict_iim` finally get real caching (2026-09-01)
 
+**Removed from the pipeline 2026-10-27** (necromerge2 `plans/speclib_rt_iim.md`): RT and
+IIM predictions come from the job's SPECLIB (`rt.mmappet`, `iim.mmappet`), checked by
+`check_speclib` with the parts the job uses; `predict_rt`/`predict_iim`/
+`correct_precursors_*` take the `Speclib` node, find the first search's PSMs by SAGE's
+`peptide_row`, and call no server. `_CACHE_ROOT`, the Koina model and server constants,
+`rt_cache_path`/`iim_cache_path` and `[recalibration.*] server_url` are gone, and
+`predict_iim` no longer writes `PredictedIim` (SAGE reads the SPECLIB's IIM itself). The
+caches stay on disk, filled by hand, as `feature-prediction-make-speclib`'s sources. What
+follows is the history of the cache-backed rules.
+
 Both rules gained a new required `RtPredictionCache`/`IimPredictionCache`
 input (mutable NodeTypes, mirroring `FragmentIntensityCache` — see
 `fragment_intensity.md`), produced by new `fill_rt_prediction_cache`/

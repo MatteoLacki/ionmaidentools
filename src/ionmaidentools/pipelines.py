@@ -237,10 +237,6 @@ class DumpPeptidesConfig(NodeType):
     filename = "dump_peptides_config.json"
 
 
-class DumpedPeptides(NodeType):
-    filename = "peptides.parquet"
-
-
 class CompactPeptidesTable(MmappetDataset):
     """`dump_peptides --compact`'s peptide table: the rows as mmappet columns plus
     `mass_chunks.bin`, `wide_masses.bin` and `meta.json` sidecars, read in place by
@@ -383,31 +379,14 @@ class RecalibratedPpmPlot(Png):
 
 
 class PredictedRt(MmappetDataset):
-    """Positional `rt` (float64, one row per `dumped_peptides` row, `meta.json`
-    carrying `dumped_peptides_sha256`) from `git/featureprediction`'s
-    `predict_rt` -- the `--predicted-rt` input SAGE1 maps to look up a
-    candidate's predicted RT during search (it can't derive this itself).
-    Independent of `PredictedIim` -- see plans/rt_iim_independent_dimensions.md
-    (original combined design: plans/better_sage_filtering.md's B.4/B.5)."""
+    """The SPECLIB's Chronologer HI calibrated for this run: `rt` (float64 minutes),
+    one row per peptide row, SAGE's `--predicted-rt`."""
 
     filename = "predicted_rt.mmappet"
 
 
-class PredictedIim(MmappetDataset):
-    """Positional `iim` (float64, dense over `dumped_peptides` row x charge) from
-    `git/featureprediction`'s `predict_iim` -- the `--predicted-iim` input.
-    Independent of `PredictedRt`."""
-
-    filename = "predicted_iim.mmappet"
-
-
 class Speclib(NodeType):
-    """A user-provided SPECLIB: the predicted fragment intensities of one peptide
-    table (`index.mmappet` + `arrays.mmappet` + `manifest.json`, see
-    `git/featureprediction`'s `docs/ai/speclib.md`), symlinked in by `check_speclib`
-    once it has been checked against this job's `dumped_peptides` and precursor
-    charges. SAGE maps its two datasets in place; the arrays' `meta.json` declares
-    their intensity encoding."""
+    """A user-provided SPECLIB (format 3), symlinked in by `check_speclib`."""
 
     filename = "speclib"
 
@@ -419,12 +398,12 @@ class NoPrediction(NodeType):
     `update_sage_config_rt_iim` always takes both RT and IIM
     `rt_tolerance`/`mobility_tolerance` params (plain required `NodeType`s,
     not mixed Node/`None`); this stands in for whichever one wasn't
-    computed. `run_sage`'s `predicted_rt`/`predicted_iim` used to need this
-    too (`run_sage_with_predicted`, before necroflow's "mixed Node/value
-    inputs" support) but no longer do -- `run_sage` now takes a true
-    `PredictedRt | None`/`PredictedIim | None`, no sentinel required
-    (2026-08-26). Only `update_sage_config_rt_iim`'s inputs still need this
-    sentinel -- out of scope for that merge, see `run_sage`'s docstring.
+    computed. `run_sage`'s `predicted_rt` used to need this too
+    (`run_sage_with_predicted`, before necroflow's "mixed Node/value inputs"
+    support) but no longer does -- `run_sage` now takes a true
+    `PredictedRt | None`, no sentinel required (2026-08-26). Only
+    `update_sage_config_rt_iim`'s inputs still need this sentinel -- out of scope
+    for that merge, see `run_sage`'s docstring.
     (necroflow *does* support skipping a rule entirely via plain `if/else`
     branching in the workflow -- see its `docs/rules.md`'s
     "Conditional pipelines" -- but here RT/IIM are independently optional,
@@ -1005,19 +984,6 @@ def write_dump_peptides_config(text: str):
 
 
 @command(
-    "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} -o {peptides}",
-    threads=CORES,
-)
-def dump_peptides(
-    fasta: Fasta,
-    dump_peptides_config: DumpPeptidesConfig,
-    dump_peptides_binary: DumpPeptidesBinary,
-):
-    peptides = output(DumpedPeptides)
-    return peptides
-
-
-@command(
     "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} --compact {compact_peptides}",
     threads=CORES,
 )
@@ -1030,30 +996,26 @@ def dump_compact_peptides(
     return compact_peptides
 
 
-# Prediction caches (RT/IIM) live *outside* `nodes/`,
-# addressed by a plain path parameter rather than produced by a rule.
-#
-# They are semantically neutral by construction: every consumer does
-# lookup-before-append against a deterministic key, so a cold cache and a warm
-# one yield byte-identical output and differ only in how many Koina calls get
-# made. That invariant is what licenses keeping them out of node identity.
-#
-# A fixed working-directory-relative path, never a job-config value and never read
-# from the environment here. `mscaches` is a Makefile-managed symlink, the same
-# convention `data` and `fastas` already use: `make mscaches` points it at
-# `$ION_MAIDEN_MSCACHES_PATH` if that is set, else creates a plain directory. The
-# indirection matters because the cache path is an ordinary config parameter and
-# therefore lands in node identity -- keeping the literal string fixed means two
-# people with caches on different filesystems still compute the same hashes,
-# which resolving an absolute path here would have broken.
-_CACHE_ROOT = "mscaches"
+_SPECLIB_FORMAT_VERSION = 3
 
-# Duplicated from `git/featureprediction`'s `koina_client` -- can't import
-# across venvs (same reasoning as `_DEFAULT_KOINA_*_SERVER_URL` below). Used
-# only to name cache directories, keyed by what the cache's own key does *not*
-# cover.
-_KOINA_RT_MODEL = "Chronologer_RT"
-_KOINA_IIM_MODEL = "IM2Deep"
+
+def _json_text(obj) -> str:
+    """A JSON file's text: sorted keys, indented, ending with a newline."""
+    return json.dumps(obj, sort_keys=True, indent=2) + "\n"
+
+
+def _read_speclib_manifest(path: str) -> dict:
+    manifest_path = Path(path) / "manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"[speclib] path {path!r} has no manifest.json")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("format_version") != _SPECLIB_FORMAT_VERSION:
+        raise ValueError(
+            f"SPECLIB {path} is format version {manifest.get('format_version')!r}, the "
+            f"pipeline reads {_SPECLIB_FORMAT_VERSION}: regenerate it with "
+            "feature-prediction-make-speclib"
+        )
+    return manifest
 
 
 def _sage_searches_sliced(sage) -> bool:
@@ -1071,25 +1033,21 @@ def _sage_searches_sliced(sage) -> bool:
     return not any(monolithic_only)
 
 
-def _cache_root() -> Path:
-    """The shared prediction-cache root (see `_CACHE_ROOT`)."""
-    return Path(_CACHE_ROOT)
-
-
 @command(
     "venvs/featureprediction/bin/feature-prediction-check-speclib"
-    " {dumped_peptides} {path} --min-charge {min_charge} --max-charge {max_charge}"
+    " {compact_peptides} {path} --min-charge {min_charge} --max-charge {max_charge}"
+    " --require={require}"
     " && ln -s $(realpath {path}) {speclib}"
 )
 def check_speclib(
-    dumped_peptides: DumpedPeptides, path: str, min_charge: int, max_charge: int
+    compact_peptides: CompactPeptidesTable,
+    path: str,
+    min_charge: int,
+    max_charge: int,
+    require: str,
 ):
-    """Check the SPECLIB at `path` (a `[speclib]` job's `path`, e.g. under the
-    Makefile-managed `speclibs` symlink) against this job's `dumped_peptides` and
-    precursor charges, then symlink it in as this rule's output. Needs only
-    `dumped_peptides`, so a SPECLIB made for another peptide table or charge range
-    fails here, before the first search, not in the final `run_sage`; SAGE repeats
-    the fingerprint and charge checks itself."""
+    """Check the SPECLIB at `path` against this job's peptide table, precursor charges
+    and the parts it uses (`require`), then symlink it in."""
     speclib = output(Speclib)
     return speclib
 
@@ -1144,9 +1102,10 @@ def _run_sage_command(args: CommandArgs) -> str:
         flags += f" --compact-peptides {shlex.quote(str(args.inputs.compact_peptides))}"
     if args.inputs.predicted_rt is not None:
         flags += f" --predicted-rt {shlex.quote(str(args.inputs.predicted_rt))}"
-    if args.inputs.predicted_iim is not None:
-        flags += f" --predicted-iim {shlex.quote(str(args.inputs.predicted_iim))}"
-    if args.inputs.speclib is not None:
+    if args.config.speclib_iim:
+        iim = Path(args.inputs.speclib) / "iim.mmappet"
+        flags += f" --predicted-iim {shlex.quote(str(iim))}"
+    if args.config.speclib_fragments:
         speclib = Path(args.inputs.speclib)
         flags += (
             f" --predicted-fragment-intensity-index {shlex.quote(str(speclib / 'index.mmappet'))}"
@@ -1176,24 +1135,23 @@ def run_sage(
     sage_binary: SageBinary,
     tof2mz: Tof2MzTable,
     predicted_rt: PredictedRt | None = None,
-    predicted_iim: PredictedIim | None = None,
     compact_peptides: CompactPeptidesTable | None = None,
     speclib: Speclib | None = None,
+    speclib_fragments: bool = False,
+    speclib_iim: bool = False,
 ):
-    """Run Sage. `predicted_rt`/`predicted_iim` are optional (mixed
-    Node/`None` inputs) -- omitted for pass-1 and mode 1/2's plain search,
-    passed as real Nodes for whichever dimension mode 3 has active.
-    `sage_config` must already carry `rt_tol_sec`+`rt_sigma_sec` and/or
-    `mobility_tol`+`iim_sigma` for whichever dimensions are passed here
-    (`update_sage_config_rt_iim`), same requirement `Input::build()`
-    enforces Rust-side. See plans/better_sage_filtering.md's B.4-B.6 and
+    """Run Sage. `predicted_rt` and `speclib` are optional (mixed Node/`None`
+    inputs) -- omitted for pass-1 and mode 1/2's plain search. `speclib`
+    (`check_speclib`'s output) is the only source of predicted fragment intensities
+    (`speclib_fragments`: its `index.mmappet` + `arrays.mmappet`, feature-only, the
+    `ms2_*` scoring columns, no hard eviction -- see
+    `git/sage/docs/ai/predicted_fragment_intensity.md`) and of predicted IIM
+    (`speclib_iim`: its `iim.mmappet` as `--predicted-iim`). `sage_config` must
+    already carry `rt_tol_sec`+`rt_sigma_sec` and/or `mobility_tol`+`iim_sigma` for
+    whichever of RT/IIM is passed here (`update_sage_config_rt_iim`), same
+    requirement `Input::build()` enforces Rust-side. See
+    plans/better_sage_filtering.md's B.4-B.6 and
     plans/rt_iim_independent_dimensions.md.
-
-    `speclib` (`check_speclib`'s output, a mixed Node/`None` input) is the only
-    source of predicted fragment intensities: SAGE gets its `index.mmappet` and
-    `arrays.mmappet` -- feature-only (`ms2_*` scoring columns), no hard eviction,
-    independent of predicted_rt/predicted_iim. See
-    `git/sage/docs/ai/predicted_fragment_intensity.md`.
 
     Sage reads fragment m/z as `tof2mz[tof]` from `pmsms`' `tof` column. `pmsms`
     is either a pmsms, or the raw `Ms2Events` store, read in place as
@@ -1222,63 +1180,23 @@ def write_no_prediction_marker(text: str):
 
 _NO_PREDICTION_TEXT = "no prediction requested for this dimension\n"
 
-# Duplicated from `git/featureprediction`'s `koina_client` -- can't import
-# across venvs (this repo shells out to a separate `venvs/featureprediction`
-# install, doesn't depend on that package directly), same reasoning as
-# `default_precursor_charge` duplicating SAGE's own compiled-in (2, 4)
-# default just above.
-#
-# Two different defaults, not one shared value: `predict_iim` still goes
-# through `koinapy.Koina` (IM2Deep), which speaks **gRPC** on :8500;
-# `predict_rt`'s direct-HTTP Chronologer client needs the *separate* HTTP
-# REST port, :8501 -- verified live (2026-08-25) that POSTing plain HTTP to
-# :8500 gets back raw HTTP/2 SETTINGS-frame bytes (`BadStatusLine`), since
-# gRPC always runs over HTTP/2; :8501 is real Triton HTTP on the same host.
-_DEFAULT_KOINA_GRPC_SERVER_URL = "192.168.1.222:8500"  # predict_iim (koinapy/IM2Deep)
-_DEFAULT_KOINA_HTTP_SERVER_URL = (
-    "192.168.1.222:8501"  # predict_rt (direct HTTP/Chronologer)
-)
-
-
-def _server_url_arg(value: str | list[str] | None, default: str) -> str:
-    """`[recalibration.rt]`/`[recalibration.iim]`'s `server_url` (a plain
-    string or a TOML array -- either is valid config shape) into the single
-    comma-separated string `feature-prediction-generate-{rt,iim}`'s
-    `--server-url` flag expects (it splits on comma back into a priority
-    list -- ip0 tried first, falling back to ip1 etc. on failure). `default`
-    must match the caller's own protocol/port (see the two constants
-    above -- RT and IIM are not interchangeable here)."""
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return value
-    return ",".join(value)
-
-
 @command(
     "venvs/featureprediction/bin/feature-prediction-generate-rt"
-    " {dumped_peptides} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
+    " {speclib} {sage_results_tsv} {predicted_rt} {rt_tolerance} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
-    " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
-    " --cache-path {rt_cache_path}",
+    " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
 def predict_rt(
-    dumped_peptides: DumpedPeptides,
+    speclib: Speclib,
     sage_results_tsv: SageResultsTsv,
-    rt_cache_path: str,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
-    server_url: str,
     fdr: int | float,
 ):
-    """`rt_cache_path` is the shared RT cache directory (a plain config path,
-    not a node -- see `_DEFAULT_CACHE_ROOT`), created on first use. No separate
-    fill rule: `predict_hi_cached` already looks up, calls Chronologer for
-    exactly the missing sequences, and appends, so a warm cache makes this a
-    pure lookup and a cold one just makes it slower. Chronologer's direct-HTTP
-    path fills the full F9477 dump in ~90s even from empty."""
+    """The SPECLIB's Chronologer HI calibrated to this run's RT on the first
+    search's confident PSMs (found by their `peptide_row`), for every peptide row."""
     predicted_rt = output(PredictedRt)
     rt_tolerance = output(RtTolerance)
     plot = output(RtFitPlot)
@@ -1287,41 +1205,29 @@ def predict_rt(
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-generate-iim"
-    " {dumped_peptides} {sage_results_tsv} {predicted_iim} {mobility_tolerance} {plot}"
-    " --min-charge {min_charge} --max-charge {max_charge}"
+    " {speclib} {sage_results_tsv} {mobility_tolerance} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
-    " --tolerance-method {tolerance_method} --server-url {server_url} --fdr {fdr}"
-    " --cache-path {iim_cache_path}",
+    " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
 def predict_iim(
-    dumped_peptides: DumpedPeptides,
+    speclib: Speclib,
     sage_results_tsv: SageResultsTsv,
-    iim_cache_path: str,
-    min_charge: int,
-    max_charge: int,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
-    server_url: str,
     fdr: int | float,
 ):
-    """`iim_cache_path` is the shared IIM cache directory (a plain config path,
-    not a node -- see `_DEFAULT_CACHE_ROOT`), created on first use. No separate
-    fill rule, same reasoning as `predict_rt`: `predict_iim_cached` looks up,
-    calls IM2Deep for the missing `(sequence, charge)` pairs, and appends. This
-    is the genuinely expensive Koina call (IM2Deep, synchronous, historically
-    the ~45-minute bottleneck on a full F9477 dump), so a warm shared cache
-    matters more here than for RT."""
-    predicted_iim = output(PredictedIim)
+    """The tolerance of the SPECLIB's IM2Deep 1/K0 against the first search's
+    confident PSMs; SAGE reads that IIM from the SPECLIB as it is."""
     mobility_tolerance = output(MobilityTolerance)
     plot = output(IimFitPlot)
-    return predicted_iim, mobility_tolerance, plot
+    return mobility_tolerance, plot
 
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-rt"
-    " {sage_results_tsv} {predicted_rt} {dumped_peptides} {mz_corrected_precursors}"
+    " {sage_results_tsv} {predicted_rt} {mz_corrected_precursors}"
     " {output_precursors} {rt_tolerance} {rt_model} {plot}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}",
@@ -1330,7 +1236,6 @@ def predict_iim(
 def correct_precursors_rt(
     sage_results_tsv: SageResultsTsv,
     predicted_rt: PredictedRt,
-    dumped_peptides: DumpedPeptides,
     mz_corrected_precursors: RecalibratedPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
@@ -1346,19 +1251,15 @@ def correct_precursors_rt(
 
 @command(
     "venvs/featureprediction/bin/feature-prediction-correct-precursors-iim"
-    " {sage_results_tsv} {predicted_iim} {dumped_peptides} {mz_corrected_precursors}"
+    " {sage_results_tsv} {speclib} {mz_corrected_precursors}"
     " {output_precursors} {mobility_tolerance} {iim_models} {plot}"
-    " --min-charge {min_charge} --max-charge {max_charge}"
     " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
     " --tolerance-method {tolerance_method} --fdr {fdr}",
     threads=CORES,
 )
 def correct_precursors_iim(
     sage_results_tsv: SageResultsTsv,
-    predicted_iim: PredictedIim,
-    dumped_peptides: DumpedPeptides,
-    min_charge: int,
-    max_charge: int,
+    speclib: Speclib,
     mz_corrected_precursors: RecalibratedPrecursors,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
@@ -1838,7 +1739,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     if "sage" in cfg:
         P.sage_config = write_sage_config(
-            text=json.dumps(cfg.sage, sort_keys=True, indent=2) + "\n"
+            text=_json_text(cfg.sage)
         )
 
         database = cfg.sage.database
@@ -1853,13 +1754,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             "variable_mods": database["variable_mods"],
         }
         P.dump_peptides_config = write_dump_peptides_config(
-            text=json.dumps(dump_peptides_database, sort_keys=True, indent=2) + "\n"
+            text=_json_text(dump_peptides_database)
         )
-        P.dumped_peptides = dump_peptides(
-            P.fasta, P.dump_peptides_config, P.dump_peptides_binary
-        )
-        # The sliced search reads its peptide table from this node instead of
-        # building it on every run.
         P.compact_peptides = dump_compact_peptides(
             P.fasta, P.dump_peptides_config, P.dump_peptides_binary
         )
@@ -1867,37 +1763,43 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.compact_peptides if _sage_searches_sliced(cfg.sage) else None
         )
 
-        # Shared prediction caches, addressed by path rather than produced by
-        # a rule -- see `_DEFAULT_CACHE_ROOT` for why they sit outside `nodes/`.
-        # Each directory is named by what its own cache key does not cover, so
-        # switching model opens a different cache instead of mixing incomparable
-        # predictions under one key.
-        _cache_dir = _cache_root()
-        _rt_cache_path = str(_cache_dir / "rt" / _KOINA_RT_MODEL)
-        _iim_cache_path = str(_cache_dir / "iim" / _KOINA_IIM_MODEL)
-
-        # Predicted fragment intensities come only from a SPECLIB: `[speclib]`
-        # (`path = "speclibs/<name>"`), checked against this job's `dumped_peptides`
-        # and the search's precursor charges (`cfg.sage.precursor_charge`, else
-        # SAGE's own (2, 4) default) before the first search.
         if "fragment_intensity" in cfg:
             raise ValueError(
                 "[fragment_intensity] is gone: give the job a SPECLIB with [speclib] "
                 'path = "speclibs/<name>" (make one with feature-prediction-make-speclib)'
             )
-        _fragment_min_charge, _fragment_max_charge = cfg.sage.get(
-            "precursor_charge", (2, 4)
-        )
+        uses_rt = "rt" in cfg.get("recalibration", {})
+        uses_iim = "iim" in cfg.get("recalibration", {})
         if "speclib" in cfg:
-            P.speclib = check_speclib(
-                P.dumped_peptides,
-                path=cfg.speclib.path,
-                min_charge=_fragment_min_charge,
-                max_charge=_fragment_max_charge,
+            manifest = _read_speclib_manifest(cfg.speclib.path)
+            uses_fragments = cfg.speclib.get("use_fragment_predictions", "fragments" in manifest)
+        elif uses_rt or uses_iim:
+            raise ValueError(
+                "[recalibration.rt]/[recalibration.iim] take their predictions from a SPECLIB: "
+                'add [speclib] path = "speclibs/<name>"'
             )
-            _final_pass_speclib = P.speclib
         else:
-            _final_pass_speclib = None
+            uses_fragments = False
+
+        if uses_fragments or uses_rt or uses_iim:
+            min_charge, max_charge = cfg.sage.get("precursor_charge", (2, 4))
+            used_parts = (
+                ("fragments", uses_fragments),
+                ("retention_time", uses_rt),
+                ("inverse_ion_mobility", uses_iim),
+            )
+            P.speclib = check_speclib(
+                P.compact_peptides,
+                path=cfg.speclib.path,
+                min_charge=min_charge,
+                max_charge=max_charge,
+                require=",".join(part for part, used in used_parts if used),
+            )
+        final_pass_speclib = {
+            "speclib": P.speclib if uses_fragments or uses_iim else None,
+            "speclib_fragments": uses_fragments,
+            "speclib_iim": uses_iim,
+        }
 
         if "recalibration" in cfg:
             P.recalibration_precursor_selection_config = (
@@ -2003,18 +1905,12 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 rt_tolerance_method = cfg.recalibration.rt.get(
                     "tolerance_method", "theoretic"
                 )
-                rt_server_url = _server_url_arg(
-                    cfg.recalibration.rt.get("server_url"),
-                    _DEFAULT_KOINA_HTTP_SERVER_URL,
-                )
                 P.predicted_rt, P.rt_tolerance, P.rt_fit_plot = predict_rt(
-                    P.dumped_peptides,
+                    P.speclib,
                     P.filtered_sage_results_tsv,
-                    rt_cache_path=_rt_cache_path,
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
                     tolerance_method=rt_tolerance_method,
-                    server_url=rt_server_url,
                     fdr=cfg.sage_summarize.fdr,
                 )
                 (
@@ -2025,7 +1921,6 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 ) = correct_precursors_rt(
                     P.filtered_sage_results_tsv,
                     P.predicted_rt,
-                    P.dumped_peptides,
                     P.recalibrated_precursors,
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
@@ -2042,33 +1937,18 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.predicted_rt = None
 
             if "iim" in dimensions:
-                default_precursor_charge = cfg.sage.get("precursor_charge", (2, 4))
-                rt_iim_min_charge = cfg.recalibration.iim.get(
-                    "min_charge", default_precursor_charge[0]
-                )
-                rt_iim_max_charge = cfg.recalibration.iim.get(
-                    "max_charge", default_precursor_charge[1]
-                )
                 iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim[
                     "tolerance_percentiles"
                 ]
                 iim_tolerance_method = cfg.recalibration.iim.get(
                     "tolerance_method", "theoretic"
                 )
-                iim_server_url = _server_url_arg(
-                    cfg.recalibration.iim.get("server_url"),
-                    _DEFAULT_KOINA_GRPC_SERVER_URL,
-                )
-                P.predicted_iim, P.mobility_tolerance, P.iim_fit_plot = predict_iim(
-                    P.dumped_peptides,
+                P.mobility_tolerance, P.iim_fit_plot = predict_iim(
+                    P.speclib,
                     P.filtered_sage_results_tsv,
-                    iim_cache_path=_iim_cache_path,
-                    min_charge=rt_iim_min_charge,
-                    max_charge=rt_iim_max_charge,
                     tolerance_lo=iim_tolerance_lo,
                     tolerance_hi=iim_tolerance_hi,
                     tolerance_method=iim_tolerance_method,
-                    server_url=iim_server_url,
                     fdr=cfg.sage_summarize.fdr,
                 )
                 (
@@ -2078,10 +1958,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.precursor_correction_iim_fit_plot,
                 ) = correct_precursors_iim(
                     P.filtered_sage_results_tsv,
-                    P.predicted_iim,
-                    P.dumped_peptides,
-                    rt_iim_min_charge,
-                    rt_iim_max_charge,
+                    P.speclib,
                     precursors_for_iim_correction,
                     tolerance_lo=iim_tolerance_lo,
                     tolerance_hi=iim_tolerance_hi,
@@ -2089,8 +1966,6 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     fdr=cfg.sage_summarize.fdr,
                 )
                 current_precursors = P.rt_iim_corrected_precursors
-            else:
-                P.predicted_iim = None
 
             P.precursor_correction_rt_tolerance = (
                 precursor_correction_rt_tolerance
@@ -2123,9 +1998,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_binary,
                 tof2mz=P.recalibrated_tof2mz_table,
                 predicted_rt=P.predicted_rt,
-                predicted_iim=P.predicted_iim,
                 compact_peptides=_compact_peptides,
-                speclib=_final_pass_speclib,
+                **final_pass_speclib,
             )
 
             P.recalibrated_ppm_plot = plot_recalibrated_ppm(
@@ -2153,7 +2027,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
                 compact_peptides=_compact_peptides,
-                speclib=_final_pass_speclib,
+                **final_pass_speclib,
             )
 
         P.confident_psms = filter_sage_results(
@@ -2184,9 +2058,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     else "none"
                 ),
                 iim_source=(
-                    "external"
-                    if getattr(P, "predicted_iim", None) is not None
-                    else "none"
+                    "external" if uses_iim else "none"
                 ),
                 seed=mokapot_cfg.get("seed", 1),
                 xgboost_bagging_n_estimators=mokapot_cfg.get(
