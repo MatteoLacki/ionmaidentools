@@ -9,7 +9,7 @@ from __future__ import annotations
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import Node, Pipeline, command, outputs, workflow
+from necroflow import Node, Pipeline, Resource, command, outputs, workflow
 
 from ionmaidentools.pipelines import (
     CORES,
@@ -87,120 +87,132 @@ class SyntheticMgf(Mgf):
     pass
 
 
-@command("ln -s $(realpath {path}) {workflow}")
+@command
 def source_fragpipe_workflow(path: str):
     workflow = outputs(FragpipeWorkflow)
+    command = "ln -s $(realpath {path}) {workflow}"
     return workflow
 
 
-@command(
+@command
+def generate_fragpipe_decoy_fasta(fasta: Fasta):
+    decoy_fasta = outputs(FragpipeDecoyFasta)
     # `cd` changes the meaning of every relative path substituted into this
     # template, including the philosopher binary's own repo-relative path and
     # {decoy_fasta} itself -- so all of them are frozen to absolute via shell
     # variables *before* the cd, same reasoning as source_fasta's realpath.
-    "REPO_ROOT=$(pwd) && FASTA_ABS=$(realpath {fasta})"
-    " && DECOY_ABS=$(realpath -m {decoy_fasta})"
-    " && cd {workdir}"
-    ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
-    " workspace --init --nocheck"
-    ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
-    ' database --custom "$FASTA_ABS" --prefix rev_'
-    ' && mv $(ls *decoys*.fas | head -n 1) "$DECOY_ABS"'
-    " && rm -rf .meta"
-    ' && test -f "$DECOY_ABS"'
-)
-def generate_fragpipe_decoy_fasta(fasta: Fasta):
-    decoy_fasta = outputs(FragpipeDecoyFasta)
+    command = (
+        "REPO_ROOT=$(pwd) && FASTA_ABS=$(realpath {fasta})"
+        " && DECOY_ABS=$(realpath -m {decoy_fasta})"
+        " && cd {workdir}"
+        ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
+        " workspace --init --nocheck"
+        ' && "$REPO_ROOT/software/fragpipe/fragpipe-24.0/tools/Philosopher/philosopher-v5.1.3-RC9"'
+        ' database --custom "$FASTA_ABS" --prefix rev_'
+        ' && mv $(ls *decoys*.fas | head -n 1) "$DECOY_ABS"'
+        " && rm -rf .meta"
+        ' && test -f "$DECOY_ABS"'
+    )
     return decoy_fasta
 
 
-@command(
-    "sed -e 's|^database\\.db-path=.*|database.db-path={decoy_fasta}|'"
-    " {workflow} > {patched_workflow}"
-)
+@command
 def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDecoyFasta):
     patched_workflow = outputs(FragpipeWorkflow)
+    command = (
+        "sed -e 's|^database\\.db-path=.*|database.db-path={decoy_fasta}|'"
+        " {workflow} > {patched_workflow}"
+    )
     return patched_workflow
 
 
-@command(
-    "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
-    " {fasta} {pmsms} {precursors}"
-    " --charges {charges} --max-peptides-per-protein {max_peptides_per_protein}"
-    " --seed {seed}"
-    " && test -f {pmsms}/schema.txt && test -f {pmsms}/dataindex.mmappet/schema.txt"
-    " && test -f {precursors}/schema.txt"
-)
+@command
 def simulate_peptides_to_pmsms(
     fasta: Fasta,
     charges: str,
     max_peptides_per_protein: int,
     seed: int,
 ):
-    pmsms = outputs(SyntheticPmsms)
-    precursors = outputs(SyntheticPrecursors)
+    pmsms, precursors = outputs(SyntheticPmsms, SyntheticPrecursors)
+    command = (
+        "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
+        " {fasta} {pmsms} {precursors}"
+        " --charges {charges} --max-peptides-per-protein {max_peptides_per_protein}"
+        " --seed {seed}"
+        " && test -f {pmsms}/schema.txt && test -f {pmsms}/dataindex.mmappet/schema.txt"
+        " && test -f {precursors}/schema.txt"
+    )
     return pmsms, precursors
 
 
-@command(
-    "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
-    " --threads {threads} --numpress --zlib-level 9"
-    " && test -f {mzml} && test -f {idmap}/schema.txt",
-    threads=CORES,
-)
+@command
 def convert_synthetic_pmsms_to_mzml(
-    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors
+    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors,
+    threads: Resource[int] = CORES,
 ):
-    mzml = outputs(SyntheticMzml)
-    idmap = outputs(SyntheticMzmlIdmap)
+    mzml, idmap = outputs(SyntheticMzml, SyntheticMzmlIdmap)
+    command = (
+        "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
+        " --threads {threads} --numpress --zlib-level 9"
+        " && test -f {mzml} && test -f {idmap}/schema.txt"
+    )
     return mzml, idmap
 
 
-@command(
-    "venvs/common/bin/msms2mgf {pmsms} {precursors} {config_path} {mgf}"
-    " && test -f {mgf}"
-)
+@command
 def convert_synthetic_pmsms_to_mgf(
     pmsms: SyntheticPmsms,
     precursors: SyntheticPrecursors,
     config_path: str,
 ):
     mgf = outputs(SyntheticMgf)
+    command = (
+        "venvs/common/bin/msms2mgf {pmsms} {precursors} {config_path} {mgf}"
+        " && test -f {mgf}"
+    )
     return mgf
 
 
-@command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
+@command
 def write_fragpipe_manifest(mzml: TofFilteredMzml):
     manifest = outputs(FragpipeManifest)
+    command = 'printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}'
     return manifest
 
 
-@command(
-    "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
-    " --workflow {workflow} --manifest {manifest} --workdir {dir}"
-    " --config-tools-folder software/fragpipe/fragpipe-24.0/tools"
-    " --threads {threads} --ram {ram}"
-    ' && test -n "$(ls {dir}/log_*.txt 2>/dev/null)"',
-    threads=CORES,
-)
-def run_fragpipe(manifest: FragpipeManifest, workflow: FragpipeWorkflow, ram: int = 0):
+@command
+def run_fragpipe(
+    manifest: FragpipeManifest,
+    workflow: FragpipeWorkflow,
+    ram: int = 0,
+    threads: Resource[int] = CORES,
+):
     dir = outputs(FragpipeResultsDir)
+    command = (
+        "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
+        " --workflow {workflow} --manifest {manifest} --workdir {dir}"
+        " --config-tools-folder software/fragpipe/fragpipe-24.0/tools"
+        " --threads {threads} --ram {ram}"
+        ' && test -n "$(ls {dir}/log_*.txt 2>/dev/null)"'
+    )
     return dir
 
 
-@command("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
+@command
 def extract_fragpipe_log(dir: FragpipeResultsDir):
     log = outputs(FragpipeLog)
+    command = "cp $(ls {dir}/log_*.txt | head -n 1) {log}"
     return log
 
 
-@command(
-    "grep -m 1 temp {log} > {summary}"
-    " && grep -n 'MASS CALIBRATION' {log} -A 8 >> {summary}"
-    " && grep 'Final report numbers after FDR filtering, and post-processing' {log} >> {summary}"
-)
+@command
 def summarize_fragpipe(log: FragpipeLog):
     summary = outputs(FragpipeSummary)
+    command = (
+        "grep -m 1 temp {log} > {summary}"
+        " && grep -n 'MASS CALIBRATION' {log} -A 8 >> {summary}"
+        " && grep 'Final report numbers after FDR filtering, and post-processing' {log} >> {summary}"
+    )
     return summary
 
 def fragpipe_search(P: Pipeline, fasta, mzml, fragpipe_cfg: DotDict) -> None:

@@ -18,13 +18,14 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 
 ## Necroflow rule conventions (as used here)
 
-- A rule is a plain function decorated `@command("<shell template with {placeholders}>")`.
+- A rule is a plain function decorated `@command`. Its body declares the outputs
+  (`a, b = outputs(A, B)`), then the shell template `command = "... {placeholders}"`, then
+  returns the outputs. When flags depend on which inputs are given, `command` is a nested
+  `def command():` returning the template (`run_sage`, `update_sage_config`,
+  `update_precursors`, `mokapot`).
   Parameters annotated with a `Node` subclass are DAG-edge inputs (parent nodes);
   plain-typed parameters (`str`, `int`, `float`) are scalar config/CLI-flag inputs, not
-  DAG edges.
-- `outputs(SomeNode)` inside the function body declares a typed output node; its
-  placeholder is substituted into the shell template. The function returns the output
-  node(s).
+  DAG edges; `threads: Resource[int] = CORES` reserves cores, outside node identity.
 - Workflows (`ionmaiden_pipeline(P, config)`, `fragpipe_synthetic_pipeline(P, config)`)
   are decorated `@workflow`, so `P` is the active Pipeline while one runs and rules are
   called without it: `P.some_label = some_rule(parent_node, ..., scalar_kwarg=...)`.
