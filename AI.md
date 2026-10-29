@@ -5,7 +5,7 @@
 `src/ionmaidentools/pipelines.py` holds the necroflow workflow for the ionmaiden
 DIA timsTOF pipeline — the module almost every job TOML's `.pipeline` key points at
 (e.g. `git/ionmaidentools/src/ionmaidentools/pipelines.py:ionmaiden_pipeline`): one large
-module, `NodeType` subclasses + `@command`-decorated rule functions + the `@workflow`.
+module, `Node` subclasses + `@command`-decorated rule functions + the `@workflow`.
 `src/ionmaidentools/fragpipe_pipeline.py` builds on it with the FragPipe types, rules and
 two FragPipe workflows; `pipelines.py` imports nothing from it
 (`plans/fragpipe_pipeline_split.md` in necromerge2: an import the other way would load a
@@ -19,10 +19,10 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 ## Necroflow rule conventions (as used here)
 
 - A rule is a plain function decorated `@command("<shell template with {placeholders}>")`.
-  Parameters annotated with a `NodeType` subclass are DAG-edge inputs (parent nodes);
+  Parameters annotated with a `Node` subclass are DAG-edge inputs (parent nodes);
   plain-typed parameters (`str`, `int`, `float`) are scalar config/CLI-flag inputs, not
   DAG edges.
-- `output(SomeNodeType)` inside the function body declares a typed output node; its
+- `outputs(SomeNode)` inside the function body declares a typed output node; its
   placeholder is substituted into the shell template. The function returns the output
   node(s).
 - Workflows (`ionmaiden_pipeline(P, config)`, `fragpipe_synthetic_pipeline(P, config)`)

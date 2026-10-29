@@ -20,10 +20,10 @@ import tomlkit
 from dictodot import DotDict
 from necroflow import (
     CommandArgs,
-    NodeType,
+    Node,
     Pipeline,
     command,
-    output,
+    outputs,
     symlink_file,
     text_file,
     workflow,
@@ -33,38 +33,38 @@ CORES = os.cpu_count() or 1
 
 
 # --- base node types ---
-class MmappetDataset(NodeType):
+class MmappetDataset(Node):
     """Base type for outputs that are mmappet directories (see CLAUDE.md's
     "Precursor table format" convention). No `filename` of its own -- every
     concrete mmappet output subclasses this and sets its own."""
 
 
-class Json(NodeType):
+class Json(Node):
     """A JSON file."""
 
 
-class Toml(NodeType):
+class Toml(Node):
     """A TOML file."""
 
 
-class Tsv(NodeType):
+class Tsv(Node):
     """A tab-separated text file."""
 
 
-class Png(NodeType):
+class Png(Node):
     """A PNG image."""
 
 
-class Executable(NodeType):
+class Executable(Node):
     """A program the pipeline runs."""
 
 
 # --- source node types ---
-class BrukerD(NodeType):
+class BrukerD(Node):
     filename = "input.d"
 
 
-class Fasta(NodeType):
+class Fasta(Node):
     filename = "fasta.fasta"
 
 
@@ -76,7 +76,7 @@ class SageBinary(Executable):
     filename = "sage"
 
 
-class SageSummarizeModule(NodeType):
+class SageSummarizeModule(Node):
     filename = "sage.py"
 
 
@@ -85,11 +85,11 @@ class PipelineConfig(Toml):
     filename = "pipeline_config.toml"
 
 
-class Ms1Events(NodeType):
+class Ms1Events(Node):
     filename = "events.ms1"
 
 
-class Ms2Events(NodeType):
+class Ms2Events(Node):
     filename = "events.ms2"
 
 
@@ -117,7 +117,7 @@ class SampleTensors(MmappetDataset):
     filename = "sample_tensors.mmappet"
 
 
-class ScaleEstimates(NodeType):
+class ScaleEstimates(Node):
     filename = "scale_estimates"
 
 
@@ -189,11 +189,11 @@ class PrecursorNeighborsConfig(Toml):
     filename = "precursor_neighbors_config.toml"
 
 
-class PrecursorGridIndex(NodeType):
+class PrecursorGridIndex(Node):
     filename = "precursor_grid_index"
 
 
-class PrecursorNeighborsCsr(NodeType):
+class PrecursorNeighborsCsr(Node):
     filename = "precursor_neighbors_csr"
 
 
@@ -217,7 +217,7 @@ class SageResultsJson(Json):
     filename = "results.json"
 
 
-class Pin(NodeType):
+class Pin(Node):
     """A Percolator-IN TSV: SpecId, Label, ScanNr, <features...>, Peptide,
     Proteins. Format is generic (nothing Sage-specific) -- `SageResultsPin`
     and `SagepyRescorePin` both satisfy it, so `mokapot` accepts either."""
@@ -274,15 +274,15 @@ class MokapotFdrLevels(Tsv):
     filename = "mokapot.fdr_levels.tsv"
 
 
-class ConfidentPsmsParquet(NodeType):
+class ConfidentPsmsParquet(Node):
     filename = "confident_psms.parquet"
 
 
-class ScoreComparisonPlots(NodeType):
+class ScoreComparisonPlots(Node):
     filename = "score_comparison"
 
 
-class Mzml(NodeType):
+class Mzml(Node):
     filename = "mzml.mzML"
 
 
@@ -290,7 +290,7 @@ class MzmlIdmap(MmappetDataset):
     filename = "idmap.mmappet"
 
 
-class Mgf(NodeType):
+class Mgf(Node):
     filename = "spectra.mgf"
 
 
@@ -306,7 +306,7 @@ class TofFilteredMgf(Mgf):
     filename = "tof_filtered.mgf"
 
 
-class TarGz(NodeType):
+class TarGz(Node):
     filename = "archive.tar.gz"
 
 
@@ -367,7 +367,7 @@ class PrecursorTolerance(Json):
     filename = "precursor_tolerance.json"
 
 
-class SerializedMzModel(NodeType):
+class SerializedMzModel(Node):
     """A fitted searchops.models.MzCorrectionModel, dumped via its own save()
     (inspection only -- fit_fragment_mz/fit_precursor_mz already
     apply the model themselves, nothing downstream reads this back in)."""
@@ -424,7 +424,7 @@ class PredictedRt(MmappetDataset):
     filename = "predicted_rt.mmappet"
 
 
-class SpeclibPart(NodeType):
+class SpeclibPart(Node):
     """A SPECLIB part reflinked from the job's store (`source_speclib_*`)."""
 
 
@@ -466,7 +466,7 @@ class PrecursorCorrectionRtModel(Json):
     filename = "precursor_correction_rt_model.json"
 
 
-class PrecursorCorrectionIimModels(NodeType):
+class PrecursorCorrectionIimModels(Node):
     """A directory of per-charge XGBoost models (`{charge}.json`, plus a
     pooled fallback `0.json`) -- see `precursor_correction.fit_iim_correction`."""
 
@@ -484,45 +484,45 @@ class PrecursorCorrectionIimFitPlot(Png):
 # --- source rules (symlink pre-existing files/dirs, no validation) ---
 @command("ln -s $(realpath {path}) {tdf}")
 def source_bruker_d(path: str):
-    tdf = output(BrukerD)
+    tdf = outputs(BrukerD)
     return tdf
 
 
 @command("ln -s $(realpath {path}) {fasta}")
 def source_fasta(path: str):
-    fasta = output(Fasta)
+    fasta = outputs(Fasta)
     return fasta
 
 
 @command("ln -s $(realpath {path}) {mkpmsms}")
 def source_mkpmsms_binary(path: str):
-    mkpmsms = output(MkpmsmsBinary)
+    mkpmsms = outputs(MkpmsmsBinary)
     return mkpmsms
 
 
 @symlink_file
 def source_sage_binary(path: str):
-    sage_binary = output(SageBinary)
+    sage_binary = outputs(SageBinary)
     return sage_binary
 
 
 @symlink_file
 def source_dump_peptides_binary(path: str):
-    dump_peptides_binary = output(DumpPeptidesBinary)
+    dump_peptides_binary = outputs(DumpPeptidesBinary)
     return dump_peptides_binary
 
 
 # Symlinked so edits to the installed-editable module invalidate sage_summarize.
 @symlink_file
 def source_sage_summarize_module(path: str):
-    sage_summarize_module = output(SageSummarizeModule)
+    sage_summarize_module = outputs(SageSummarizeModule)
     return sage_summarize_module
 
 
 # --- compute rules ---
 @text_file
 def write_pipeline_config(text: str):
-    config = output(PipelineConfig)
+    config = outputs(PipelineConfig)
     return config
 
 
@@ -537,7 +537,7 @@ def write_pipeline_config(text: str):
     threads=CORES,
 )
 def tdf2ms1(tdf: BrukerD):
-    ms1 = output(Ms1Events)
+    ms1 = outputs(Ms1Events)
     return ms1
 
 
@@ -547,7 +547,7 @@ def tdf2ms1(tdf: BrukerD):
     " && test -f {ms2}/frame_scan_diff.mmappet/0.bin"
 )
 def tdf2ms2(tdf: BrukerD):
-    ms2 = output(Ms2Events)
+    ms2 = outputs(Ms2Events)
     return ms2
 
 
@@ -564,7 +564,7 @@ def tdf2ms2(tdf: BrukerD):
     threads=CORES,
 )
 def tdf2ms2_tfs(tdf: BrukerD):
-    ms2_tfs = output(Ms2TfsEvents)
+    ms2_tfs = outputs(Ms2TfsEvents)
     return ms2_tfs
 
 
@@ -578,13 +578,13 @@ def tdf2ms2_tfs(tdf: BrukerD):
     threads=CORES,
 )
 def tdf2ms2_tsf(tdf: BrukerD):
-    ms2_tsf = output(Ms2TsfEvents)
+    ms2_tsf = outputs(Ms2TsfEvents)
     return ms2_tsf
 
 
 @text_file
 def write_scale_estimation_config(text: str):
-    config = output(ScaleEstimationConfig)
+    config = outputs(ScaleEstimationConfig)
     return config
 
 
@@ -593,8 +593,8 @@ def write_scale_estimation_config(text: str):
     threads=CORES,
 )
 def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
-    argmaxes = output(ArgmaxSample)
-    stats = output(ArgmaxSieveStats)
+    argmaxes = outputs(ArgmaxSample)
+    stats = outputs(ArgmaxSieveStats)
     return argmaxes, stats
 
 
@@ -605,7 +605,7 @@ def find_ms1_argmaxes(ms1: Ms1Events, config: ScaleEstimationConfig):
 def extract_ms1_sample_tensors(
     ms1: Ms1Events, argmaxes: ArgmaxSample, config: ScaleEstimationConfig
 ):
-    tensors = output(SampleTensors)
+    tensors = outputs(SampleTensors)
     return tensors
 
 
@@ -619,19 +619,19 @@ def fit_ms1_scale_estimates(
     tensors: SampleTensors,
     config: ScaleEstimationConfig,
 ):
-    scales = output(ScaleEstimates)
+    scales = outputs(ScaleEstimates)
     return scales
 
 
 @text_file
 def write_precursor_neighbor_count_config(text: str):
-    config = output(PrecursorNeighborCountConfig)
+    config = outputs(PrecursorNeighborCountConfig)
     return config
 
 
 @text_file
 def write_precursor_candidate_selection_config(text: str):
-    config = output(PrecursorCandidateSelectionConfig)
+    config = outputs(PrecursorCandidateSelectionConfig)
     return config
 
 
@@ -644,7 +644,7 @@ def count_candidate_neighbors(
     scale_estimates: ScaleEstimates,
     config: PrecursorNeighborCountConfig,
 ):
-    features = output(RawCandidateFeatures)
+    features = outputs(RawCandidateFeatures)
     return features
 
 
@@ -658,19 +658,19 @@ def score_candidates(
     features: RawCandidateFeatures,
     config: PrecursorCandidateSelectionConfig,
 ):
-    clusters = output(RawPrecursorClusters)
+    clusters = outputs(RawPrecursorClusters)
     return clusters
 
 
 @text_file
 def write_precursor_annotation_config(text: str):
-    config = output(PrecursorAnnotationConfig)
+    config = outputs(PrecursorAnnotationConfig)
     return config
 
 
 @text_file
 def write_postprocessing_config(text: str):
-    config = output(PostprocessingConfig)
+    config = outputs(PostprocessingConfig)
     return config
 
 
@@ -685,7 +685,7 @@ def annotate_precursor_clusters(
     scale_estimates: ScaleEstimates,
     config: PrecursorAnnotationConfig,
 ):
-    annotated = output(AnnotatedPrecursorClusters)
+    annotated = outputs(AnnotatedPrecursorClusters)
     return annotated
 
 
@@ -699,13 +699,13 @@ def decharge_precursor_clusters(
     annotated: AnnotatedPrecursorClusters,
     config: PostprocessingConfig,
 ):
-    clusters = output(PostprocessedPrecursorClusters)
+    clusters = outputs(PostprocessedPrecursorClusters)
     return clusters
 
 
 @text_file
 def write_precursor_transmission_config(text: str):
-    config = output(PrecursorTransmissionConfig)
+    config = outputs(PrecursorTransmissionConfig)
     return config
 
 
@@ -720,8 +720,8 @@ def transmit_precursors_into_fragment_space(
     clusters: PostprocessedPrecursorClusters,
     config: PrecursorTransmissionConfig,
 ):
-    transpec = output(TransmittedMs1Events)
-    precursors = output(TransmittedPrecursorClusters)
+    transpec = outputs(TransmittedMs1Events)
+    precursors = outputs(TransmittedPrecursorClusters)
     return transpec, precursors
 
 
@@ -730,13 +730,13 @@ def transmit_precursors_into_fragment_space(
     threads=CORES,
 )
 def filter_first_precursors(precursors: TransmittedPrecursorClusters, filter: str):
-    filtered = output(FirstFilterPrecursors)
+    filtered = outputs(FirstFilterPrecursors)
     return filtered
 
 
 @text_file
 def write_pseudomsms_config(text: str):
-    config = output(PseudomsmsConfig)
+    config = outputs(PseudomsmsConfig)
     return config
 
 
@@ -761,7 +761,7 @@ def run_mkpmsms_binary(
     filter_mm: FirstFilterPrecursors,
     config: PseudomsmsConfig,
 ):
-    pmsms = output(Pmsms)
+    pmsms = outputs(Pmsms)
     return pmsms
 
 
@@ -770,7 +770,7 @@ def run_mkpmsms_binary(
     threads=CORES,
 )
 def cut_and_index_precursors(filter_mm: FirstFilterPrecursors, pmsms: Pmsms):
-    precursors = output(Ms2IndexedPrecursors)
+    precursors = outputs(Ms2IndexedPrecursors)
     return precursors
 
 
@@ -779,13 +779,13 @@ def cut_and_index_precursors(filter_mm: FirstFilterPrecursors, pmsms: Pmsms):
     threads=CORES,
 )
 def filter_pre_sage_precursors(precursors: Ms2IndexedPrecursors, filter: str):
-    filtered = output(PreSageFilteredPrecursors)
+    filtered = outputs(PreSageFilteredPrecursors)
     return filtered
 
 
 @command("venvs/common/bin/python -m timstofu.cli.write_tof2mz_table {tdf} {table}")
 def write_tof2mz_table(tdf: BrukerD):
-    table = output(Tof2MzTable)
+    table = outputs(Tof2MzTable)
     return table
 
 
@@ -798,13 +798,13 @@ def top_cell_precursors(
     transmitted: TransmittedMs1Events,
     ms2: Ms2Events,
 ):
-    top_cell = output(TopCellPrecursors)
+    top_cell = outputs(TopCellPrecursors)
     return top_cell
 
 
 @text_file
 def write_precursor_neighbors_config(text: str):
-    config = output(PrecursorNeighborsConfig)
+    config = outputs(PrecursorNeighborsConfig)
     return config
 
 
@@ -816,7 +816,7 @@ def build_precursor_grid_index(
     tdf: BrukerD,
     config: PrecursorNeighborsConfig,
 ):
-    grid = output(PrecursorGridIndex)
+    grid = outputs(PrecursorGridIndex)
     return grid
 
 
@@ -832,7 +832,7 @@ def compute_precursor_neighbors(
     tdf: BrukerD,
     config: PrecursorNeighborsConfig,
 ):
-    csr = output(PrecursorNeighborsCsr)
+    csr = outputs(PrecursorNeighborsCsr)
     return csr
 
 
@@ -842,7 +842,7 @@ def compute_precursor_neighbors(
     threads=CORES,
 )
 def tof_score_filter(pmsms: Pmsms, neighbors_csr: PrecursorNeighborsCsr):
-    score = output(
+    score = outputs(
         NeighborScore
     )  # no config arg -- confirmed vestigial in the Snakemake rule
     return score
@@ -860,14 +860,14 @@ def materialize_tof_filtered_pmsms(
     neighbor_score: NeighborScore,
     score_margin: int | float,
 ):
-    pmsms_out = output(TofFilteredPmsms)
-    precursors_out = output(TofFilteredPrecursors)
+    pmsms_out = outputs(TofFilteredPmsms)
+    precursors_out = outputs(TofFilteredPrecursors)
     return pmsms_out, precursors_out
 
 
 @text_file
 def write_recalibration_precursor_selection_config(text: str):
-    config = output(RecalibrationPrecursorSelectionConfig)
+    config = outputs(RecalibrationPrecursorSelectionConfig)
     return config
 
 
@@ -880,13 +880,13 @@ def select_recalibration_precursors(
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationPrecursorSelectionConfig,
 ):
-    selected = output(RecalibrationPrecursors)
+    selected = outputs(RecalibrationPrecursors)
     return selected
 
 
 @text_file
 def write_recalibration_config(text: str):
-    config = output(RecalibrationConfig)
+    config = outputs(RecalibrationConfig)
     return config
 
 
@@ -903,10 +903,10 @@ def fit_fragment_mz(
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    fragment_shift_ppm = output(FragmentShiftPpm)
-    recalibrated_tof2mz = output(RecalibratedTof2MzTable)
-    tolerance = output(FragmentTolerance)
-    plot = output(FragmentMzFitPlot)
+    fragment_shift_ppm = outputs(FragmentShiftPpm)
+    recalibrated_tof2mz = outputs(RecalibratedTof2MzTable)
+    tolerance = outputs(FragmentTolerance)
+    plot = outputs(FragmentMzFitPlot)
     return fragment_shift_ppm, recalibrated_tof2mz, tolerance, plot
 
 
@@ -921,10 +921,10 @@ def fit_precursor_mz(
     config: RecalibrationConfig,
     fdr: int | float,
 ):
-    mz = output(CorrectedMz)
-    tolerance = output(PrecursorTolerance)
-    plot = output(PrecursorMzFitPlot)
-    model = output(SerializedMzModel)
+    mz = outputs(CorrectedMz)
+    tolerance = outputs(PrecursorTolerance)
+    plot = outputs(PrecursorMzFitPlot)
+    model = outputs(SerializedMzModel)
     return mz, tolerance, plot, model
 
 
@@ -942,19 +942,19 @@ def plot_recalibrated_ppm(
     fragment_tolerance: FragmentTolerance,
     fdr: int | float,
 ):
-    plot = output(RecalibratedPpmPlot)
+    plot = outputs(RecalibratedPpmPlot)
     return plot
 
 
 @text_file
 def write_sage_config(text: str):
-    config = output(SageConfig)
+    config = outputs(SageConfig)
     return config
 
 
 @text_file
 def write_dump_peptides_config(text: str):
-    dump_peptides_config = output(DumpPeptidesConfig)
+    dump_peptides_config = outputs(DumpPeptidesConfig)
     return dump_peptides_config
 
 
@@ -967,7 +967,7 @@ def dump_compact_peptides(
     dump_peptides_config: DumpPeptidesConfig,
     dump_peptides_binary: DumpPeptidesBinary,
 ):
-    compact_peptides = output(CompactPeptidesTable)
+    compact_peptides = outputs(CompactPeptidesTable)
     return compact_peptides
 
 
@@ -993,7 +993,7 @@ def source_speclib_fragments(
     min_charge: int,
     max_charge: int,
 ):
-    fragments = output(SpeclibFragments)
+    fragments = outputs(SpeclibFragments)
     return fragments
 
 
@@ -1005,7 +1005,7 @@ def source_speclib_rt(
     min_charge: int,
     max_charge: int,
 ):
-    rt = output(SpeclibRt)
+    rt = outputs(SpeclibRt)
     return rt
 
 
@@ -1017,7 +1017,7 @@ def source_speclib_iim(
     min_charge: int,
     max_charge: int,
 ):
-    iim = output(SpeclibIim)
+    iim = outputs(SpeclibIim)
     return iim
 
 
@@ -1117,11 +1117,11 @@ def run_sage(
     `fdr_levels` holds the confident spectra, peptidoforms and ions at 1% FDR
     (`sage-fdr-levels`), which also records the run in `$ION_MAIDEN_REGRESSION_DB`.
     """
-    results_json = output(SageResultsJson)
-    results_pin = output(SageResultsPin)
-    results_tsv = output(SageResultsTsv)
-    matched_fragments = output(SageMatchedFragments)
-    fdr_levels = output(SageFdrLevels)
+    results_json = outputs(SageResultsJson)
+    results_pin = outputs(SageResultsPin)
+    results_tsv = outputs(SageResultsTsv)
+    matched_fragments = outputs(SageMatchedFragments)
+    fdr_levels = outputs(SageFdrLevels)
     return results_json, results_pin, results_tsv, matched_fragments, fdr_levels
 
 
@@ -1145,11 +1145,11 @@ def fit_precursor_rt(
     """The SPECLIB's HI calibrated to this run's RT (`predicted_rt`, every peptide row),
     and the precursors' RT corrected on top of it (`rt`), both fitted on the first
     search's confident PSMs."""
-    predicted_rt = output(PredictedRt)
-    rt = output(CorrectedRt)
-    rt_tolerance = output(RtTolerance)
-    rt_model = output(PrecursorCorrectionRtModel)
-    plot = output(PrecursorCorrectionRtFitPlot)
+    predicted_rt = outputs(PredictedRt)
+    rt = outputs(CorrectedRt)
+    rt_tolerance = outputs(RtTolerance)
+    rt_model = outputs(PrecursorCorrectionRtModel)
+    plot = outputs(PrecursorCorrectionRtFitPlot)
     return predicted_rt, rt, rt_tolerance, rt_model, plot
 
 
@@ -1170,10 +1170,10 @@ def fit_precursor_iim(
     tolerance_method: str,
     fdr: int | float,
 ):
-    inv_ion_mobility = output(CorrectedIim)
-    mobility_tolerance = output(MobilityTolerance)
-    iim_models = output(PrecursorCorrectionIimModels)
-    plot = output(PrecursorCorrectionIimFitPlot)
+    inv_ion_mobility = outputs(CorrectedIim)
+    mobility_tolerance = outputs(MobilityTolerance)
+    iim_models = outputs(PrecursorCorrectionIimModels)
+    plot = outputs(PrecursorCorrectionIimFitPlot)
     return inv_ion_mobility, mobility_tolerance, iim_models, plot
 
 
@@ -1213,7 +1213,7 @@ def update_sage_config(
     rt_tolerance: RtTolerance | None = None,
     mobility_tolerance: MobilityTolerance | None = None,
 ):
-    recalibrated_sage_config = output(SageConfig)
+    recalibrated_sage_config = outputs(SageConfig)
     return recalibrated_sage_config
 
 
@@ -1238,7 +1238,7 @@ def update_precursors(
     rt: CorrectedRt | None = None,
     inv_ion_mobility: CorrectedIim | None = None,
 ):
-    recalibrated_precursors = output(RecalibratedPrecursors)
+    recalibrated_precursors = outputs(RecalibratedPrecursors)
     return recalibrated_precursors
 
 
@@ -1363,10 +1363,10 @@ def mokapot(
     xgboost_bagging_max_samples: int = 30_000,
     xgboost_bagging_seed: int = 0,
 ):
-    used_pin = output(MokapotUsedPin)
-    peptides = output(MokapotPeptides)
-    psms = output(MokapotPsms)
-    fdr_levels = output(MokapotFdrLevels)
+    used_pin = outputs(MokapotUsedPin)
+    peptides = outputs(MokapotPeptides)
+    psms = outputs(MokapotPsms)
+    fdr_levels = outputs(MokapotFdrLevels)
     return used_pin, peptides, psms, fdr_levels
 
 
@@ -1376,13 +1376,13 @@ def sage_summarize(
     sage_summarize_module: SageSummarizeModule,
     fdr: int | float,
 ):
-    summary = output(SageSummary)
+    summary = outputs(SageSummary)
     return summary
 
 
 @command("venvs/common/bin/sage-filter {sage_results_tsv} {confident_psms} --fdr {fdr}")
 def filter_sage_results(sage_results_tsv: SageResultsTsv, fdr: int | float):
-    confident_psms = output(ConfidentPsmsParquet)
+    confident_psms = outputs(ConfidentPsmsParquet)
     return confident_psms
 
 
@@ -1398,7 +1398,7 @@ def score_comparison(
 ):
     """mkpmsms scores of the peaks SAGE matched for confident PSMs (its
     `fragment_pmsms_row`) against all other pmsms peaks."""
-    plots = output(ScoreComparisonPlots)
+    plots = outputs(ScoreComparisonPlots)
     return plots
 
 
@@ -1413,8 +1413,8 @@ def convert_search_pmsms_to_mzml(
     tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
 ):
-    mzml = output(TofFilteredMzml)
-    idmap = output(TofFilteredMzmlIdmap)
+    mzml = outputs(TofFilteredMzml)
+    idmap = outputs(TofFilteredMzmlIdmap)
     return mzml, idmap
 
 
@@ -1434,7 +1434,7 @@ def convert_search_pmsms_to_mgf(
     precursors: PreSageFilteredPrecursors,
     config_path: str,
 ):
-    mgf = output(TofFilteredMgf)
+    mgf = outputs(TofFilteredMgf)
     return mgf
 
 
@@ -1443,8 +1443,8 @@ def convert_search_pmsms_to_mgf(
     " && test -f {archive}",
     threads=CORES,
 )
-def compress_with_pigz(path: NodeType):
-    archive = output(TarGz)
+def compress_with_pigz(path: Node):
+    archive = outputs(TarGz)
     return archive
 
 

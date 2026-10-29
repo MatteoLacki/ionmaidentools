@@ -9,7 +9,7 @@ from __future__ import annotations
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import NodeType, Pipeline, command, output, workflow
+from necroflow import Node, Pipeline, command, outputs, workflow
 
 from ionmaidentools.pipelines import (
     CORES,
@@ -25,7 +25,7 @@ from ionmaidentools.pipelines import (
 )
 
 
-class FragpipeWorkflow(NodeType):
+class FragpipeWorkflow(Node):
     """A hand-maintained FragPipe `.workflow` file -- treated as a data file
     like Fasta/BrukerD, symlinked in as-is. Never generated or patched by
     the pipeline (unlike Sage's JSON config)."""
@@ -33,23 +33,23 @@ class FragpipeWorkflow(NodeType):
     filename = "fragpipe_workflow.workflow"
 
 
-class FragpipeManifest(NodeType):
+class FragpipeManifest(Node):
     filename = "fragpipe_manifest.tsv"
 
 
-class FragpipeResultsDir(NodeType):
+class FragpipeResultsDir(Node):
     filename = "fragpipe_results"
 
 
-class FragpipeLog(NodeType):
+class FragpipeLog(Node):
     filename = "fragpipe_full_log.txt"
 
 
-class FragpipeSummary(NodeType):
+class FragpipeSummary(Node):
     filename = "fragpipe_summary.txt"
 
 
-class FragpipeDecoyFasta(NodeType):
+class FragpipeDecoyFasta(Node):
     """Target+decoy FASTA via FragPipe's own Philosopher tool (`database
     --custom ... --prefix rev_`) -- unlike Sage, FragPipe/Philosopher has no
     generate-decoys-at-search-time option, so the database must already
@@ -89,7 +89,7 @@ class SyntheticMgf(Mgf):
 
 @command("ln -s $(realpath {path}) {workflow}")
 def source_fragpipe_workflow(path: str):
-    workflow = output(FragpipeWorkflow)
+    workflow = outputs(FragpipeWorkflow)
     return workflow
 
 
@@ -110,7 +110,7 @@ def source_fragpipe_workflow(path: str):
     ' && test -f "$DECOY_ABS"'
 )
 def generate_fragpipe_decoy_fasta(fasta: Fasta):
-    decoy_fasta = output(FragpipeDecoyFasta)
+    decoy_fasta = outputs(FragpipeDecoyFasta)
     return decoy_fasta
 
 
@@ -119,7 +119,7 @@ def generate_fragpipe_decoy_fasta(fasta: Fasta):
     " {workflow} > {patched_workflow}"
 )
 def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDecoyFasta):
-    patched_workflow = output(FragpipeWorkflow)
+    patched_workflow = outputs(FragpipeWorkflow)
     return patched_workflow
 
 
@@ -137,8 +137,8 @@ def simulate_peptides_to_pmsms(
     max_peptides_per_protein: int,
     seed: int,
 ):
-    pmsms = output(SyntheticPmsms)
-    precursors = output(SyntheticPrecursors)
+    pmsms = outputs(SyntheticPmsms)
+    precursors = outputs(SyntheticPrecursors)
     return pmsms, precursors
 
 
@@ -151,8 +151,8 @@ def simulate_peptides_to_pmsms(
 def convert_synthetic_pmsms_to_mzml(
     pmsms: SyntheticPmsms, precursors: SyntheticPrecursors
 ):
-    mzml = output(SyntheticMzml)
-    idmap = output(SyntheticMzmlIdmap)
+    mzml = outputs(SyntheticMzml)
+    idmap = outputs(SyntheticMzmlIdmap)
     return mzml, idmap
 
 
@@ -165,13 +165,13 @@ def convert_synthetic_pmsms_to_mgf(
     precursors: SyntheticPrecursors,
     config_path: str,
 ):
-    mgf = output(SyntheticMgf)
+    mgf = outputs(SyntheticMgf)
     return mgf
 
 
 @command('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
 def write_fragpipe_manifest(mzml: TofFilteredMzml):
-    manifest = output(FragpipeManifest)
+    manifest = outputs(FragpipeManifest)
     return manifest
 
 
@@ -184,13 +184,13 @@ def write_fragpipe_manifest(mzml: TofFilteredMzml):
     threads=CORES,
 )
 def run_fragpipe(manifest: FragpipeManifest, workflow: FragpipeWorkflow, ram: int = 0):
-    dir = output(FragpipeResultsDir)
+    dir = outputs(FragpipeResultsDir)
     return dir
 
 
 @command("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
 def extract_fragpipe_log(dir: FragpipeResultsDir):
-    log = output(FragpipeLog)
+    log = outputs(FragpipeLog)
     return log
 
 
@@ -200,7 +200,7 @@ def extract_fragpipe_log(dir: FragpipeResultsDir):
     " && grep 'Final report numbers after FDR filtering, and post-processing' {log} >> {summary}"
 )
 def summarize_fragpipe(log: FragpipeLog):
-    summary = output(FragpipeSummary)
+    summary = outputs(FragpipeSummary)
     return summary
 
 def fragpipe_search(P: Pipeline, fasta, mzml, fragpipe_cfg: DotDict) -> None:
