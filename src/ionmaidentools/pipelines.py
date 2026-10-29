@@ -1161,6 +1161,7 @@ def fit_precursor_rt(
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
+    rt_fit: str,
     fdr: int | float,
     threads: Resource[int] = CORES,
 ):
@@ -1175,7 +1176,7 @@ def fit_precursor_rt(
         " {sage_results_tsv} {speclib_rt} {precursors}"
         " {predicted_rt} {rt} {rt_tolerance} {rt_model} {plot}"
         " --tolerance-lo {tolerance_lo} --tolerance-hi {tolerance_hi}"
-        " --tolerance-method {tolerance_method} --fdr {fdr}"
+        " --tolerance-method {tolerance_method} --rt-fit {rt_fit} --fdr {fdr}"
     )
     return predicted_rt, rt, rt_tolerance, rt_model, plot
 
@@ -1766,6 +1767,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     tolerance_lo=rt_tolerance_lo,
                     tolerance_hi=rt_tolerance_hi,
                     tolerance_method=rt_tolerance_method,
+                    rt_fit=cfg.recalibration.rt.get("fit", "robust"),
                     fdr=cfg.sage_summarize.fdr,
                 )
                 corrections["rt"] = P.corrected_rt
