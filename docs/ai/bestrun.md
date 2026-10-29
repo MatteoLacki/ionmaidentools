@@ -24,17 +24,19 @@ within mokapot's noise.
 
 `[score_competition]` added (each precursor's ToF scores against its neighbours'; the settings of
 the former `f9477_best_plus_tof_filter`, `score_margin = 0.05`), on the SPECLIB store and after
-the precursor RT unit fix (necromerge2 `plans/precursor_corrections.md`). Each level at 1% FDR
-from its own competition (`*.fdr_levels.tsv`; run database rows 61/62):
+the precursor RT unit fix (necromerge2 `plans/precursor_corrections.md`). Rebuilt from an empty
+node store; each level at 1% FDR from its own competition (`*.fdr_levels.tsv`; run database
+rows 71/72):
 
 | | spectra | peptidoforms | ions |
 |---|---|---|---|
-| SAGE | 85,050 | 22,009 | 23,707 |
-| mokapot | 99,692 | **29,128** | **31,912** |
+| SAGE | 79,600 | 19,808 | 21,454 |
+| mokapot | 99,300 | **29,326** | **32,016** |
 
-Without `[score_competition]` (rows 58/59): mokapot 28,338 / 30,853. With DIA-NN 2.7.0 IIM it adds
-nothing (rows 63–66). These levels count differently from the entries below; don't compare
-across.
+With DIA-NN 2.7.0 IIM instead of none: mokapot 28,452 / 30,753 (rows 74/75), plus
+`[score_competition]` 28,837 / 31,072 (rows 76/77). Earlier rows (19–69) ran on MS1 nodes from
+before timstofu 42f4b0a and aren't comparable. These levels count differently from the entries
+below; don't compare across.
 
 ## Previous best (2026-10-07)
 
