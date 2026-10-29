@@ -9,7 +9,7 @@ from __future__ import annotations
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import Node, Pipeline, Resource, command, outputs, workflow
+from necroflow import Node, Pipeline, Resource, command, outputs, shell, workflow
 
 from ionmaidentools.pipelines import (
     CORES,
@@ -90,7 +90,7 @@ class SyntheticMgf(Mgf):
 @command
 def source_fragpipe_workflow(path: str):
     workflow = outputs(FragpipeWorkflow)
-    command = "ln -s $(realpath {path}) {workflow}"
+    shell("ln -s $(realpath {path}) {workflow}")
     return workflow
 
 
@@ -101,7 +101,7 @@ def generate_fragpipe_decoy_fasta(fasta: Fasta):
     # template, including the philosopher binary's own repo-relative path and
     # {decoy_fasta} itself -- so all of them are frozen to absolute via shell
     # variables *before* the cd, same reasoning as source_fasta's realpath.
-    command = (
+    shell(
         "REPO_ROOT=$(pwd) && FASTA_ABS=$(realpath {fasta})"
         " && DECOY_ABS=$(realpath -m {decoy_fasta})"
         " && cd {workdir}"
@@ -119,7 +119,7 @@ def generate_fragpipe_decoy_fasta(fasta: Fasta):
 @command
 def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDecoyFasta):
     patched_workflow = outputs(FragpipeWorkflow)
-    command = (
+    shell(
         "sed -e 's|^database\\.db-path=.*|database.db-path={decoy_fasta}|'"
         " {workflow} > {patched_workflow}"
     )
@@ -134,7 +134,7 @@ def simulate_peptides_to_pmsms(
     seed: int,
 ):
     pmsms, precursors = outputs(SyntheticPmsms, SyntheticPrecursors)
-    command = (
+    shell(
         "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
         " {fasta} {pmsms} {precursors}"
         " --charges {charges} --max-peptides-per-protein {max_peptides_per_protein}"
@@ -151,7 +151,7 @@ def convert_synthetic_pmsms_to_mzml(
     threads: Resource[int] = CORES,
 ):
     mzml, idmap = outputs(SyntheticMzml, SyntheticMzmlIdmap)
-    command = (
+    shell(
         "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
         " --threads {threads} --numpress --zlib-level 9"
         " && test -f {mzml} && test -f {idmap}/schema.txt"
@@ -166,7 +166,7 @@ def convert_synthetic_pmsms_to_mgf(
     config_path: str,
 ):
     mgf = outputs(SyntheticMgf)
-    command = (
+    shell(
         "venvs/common/bin/msms2mgf {pmsms} {precursors} {config_path} {mgf}"
         " && test -f {mgf}"
     )
@@ -176,7 +176,7 @@ def convert_synthetic_pmsms_to_mgf(
 @command
 def write_fragpipe_manifest(mzml: TofFilteredMzml):
     manifest = outputs(FragpipeManifest)
-    command = 'printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}'
+    shell('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
     return manifest
 
 
@@ -188,7 +188,7 @@ def run_fragpipe(
     threads: Resource[int] = CORES,
 ):
     dir = outputs(FragpipeResultsDir)
-    command = (
+    shell(
         "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
         " --workflow {workflow} --manifest {manifest} --workdir {dir}"
         " --config-tools-folder software/fragpipe/fragpipe-24.0/tools"
@@ -201,14 +201,14 @@ def run_fragpipe(
 @command
 def extract_fragpipe_log(dir: FragpipeResultsDir):
     log = outputs(FragpipeLog)
-    command = "cp $(ls {dir}/log_*.txt | head -n 1) {log}"
+    shell("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
     return log
 
 
 @command
 def summarize_fragpipe(log: FragpipeLog):
     summary = outputs(FragpipeSummary)
-    command = (
+    shell(
         "grep -m 1 temp {log} > {summary}"
         " && grep -n 'MASS CALIBRATION' {log} -A 8 >> {summary}"
         " && grep 'Final report numbers after FDR filtering, and post-processing' {log} >> {summary}"

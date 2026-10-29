@@ -19,10 +19,10 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 ## Necroflow rule conventions (as used here)
 
 - A rule is a plain function decorated `@command`. Its body declares the outputs
-  (`a, b = outputs(A, B)`), then the shell template `command = "... {placeholders}"`, then
-  returns the outputs. When flags depend on which inputs are given, `command` is a nested
-  `def command():` returning the template (`run_sage`, `update_sage_config`,
-  `update_precursors`, `mokapot`).
+  (`a, b = outputs(A, B)`), registers one shell template with `shell("... {placeholders}")`,
+  then returns the outputs. The body runs while the graph is built, so flags that depend on
+  which inputs are given are plain Python before `shell(...)` (`run_sage`,
+  `update_sage_config`, `update_precursors`, `mokapot`).
   Parameters annotated with a `Node` subclass are DAG-edge inputs (parent nodes);
   plain-typed parameters (`str`, `int`, `float`) are scalar config/CLI-flag inputs, not
   DAG edges; `threads: Resource[int] = CORES` reserves cores, outside node identity.

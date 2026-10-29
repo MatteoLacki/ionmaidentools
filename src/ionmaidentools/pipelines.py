@@ -24,6 +24,7 @@ from necroflow import (
     Resource,
     command,
     outputs,
+    shell,
     symlink_file,
     text_file,
     workflow,
@@ -485,21 +486,21 @@ class PrecursorCorrectionIimFitPlot(Png):
 @command
 def source_bruker_d(path: str):
     tdf = outputs(BrukerD)
-    command = "ln -s $(realpath {path}) {tdf}"
+    shell("ln -s $(realpath {path}) {tdf}")
     return tdf
 
 
 @command
 def source_fasta(path: str):
     fasta = outputs(Fasta)
-    command = "ln -s $(realpath {path}) {fasta}"
+    shell("ln -s $(realpath {path}) {fasta}")
     return fasta
 
 
 @command
 def source_mkpmsms_binary(path: str):
     mkpmsms = outputs(MkpmsmsBinary)
-    command = "ln -s $(realpath {path}) {mkpmsms}"
+    shell("ln -s $(realpath {path}) {mkpmsms}")
     return mkpmsms
 
 
@@ -532,7 +533,7 @@ def write_pipeline_config(text: str):
 @command
 def tdf2ms1(tdf: BrukerD, threads: Resource[int] = CORES):
     ms1 = outputs(Ms1Events)
-    command = (
+    shell(
         "git/ionmaidenmetal/build/tdf2ms ms1 {tdf} {ms1}"
         " --threads {threads} --paced-writeback-mib 1024 --implicit-tof-urt --overwrite"
         " && grep -qx 'uint64 x' {ms1}/tof_row_starts.mmappet/schema.txt"
@@ -547,7 +548,7 @@ def tdf2ms1(tdf: BrukerD, threads: Resource[int] = CORES):
 @command
 def tdf2ms2(tdf: BrukerD):
     ms2 = outputs(Ms2Events)
-    command = (
+    shell(
         "git/ionmaidenmetal/build/tdf2ms ms2 {tdf} {ms2} --overwrite"
         " && test -f {ms2}/frame_row_starts.mmappet/0.bin"
         " && test -f {ms2}/frame_scan_diff.mmappet/0.bin"
@@ -558,7 +559,7 @@ def tdf2ms2(tdf: BrukerD):
 @command
 def tdf2ms2_tfs(tdf: BrukerD, threads: Resource[int] = CORES):
     ms2_tfs = outputs(Ms2TfsEvents)
-    command = (
+    shell(
         "git/ionmaidenmetal/build/tdf2ms ms2-tfs {tdf} {ms2_tfs}"
         " --threads {threads} --overwrite"
         " && test -f {ms2_tfs}/data.mmappet/schema.txt"
@@ -575,7 +576,7 @@ def tdf2ms2_tfs(tdf: BrukerD, threads: Resource[int] = CORES):
 @command
 def tdf2ms2_tsf(tdf: BrukerD, threads: Resource[int] = CORES):
     ms2_tsf = outputs(Ms2TsfEvents)
-    command = (
+    shell(
         "git/ionmaidenmetal/build/tdf2ms ms2-tsf {tdf} {ms2_tsf}"
         " --threads {threads} --overwrite"
         " && test -f {ms2_tsf}/data.mmappet/schema.txt"
@@ -599,7 +600,7 @@ def find_ms1_argmaxes(
     threads: Resource[int] = CORES,
 ):
     argmaxes, stats = outputs(ArgmaxSample, ArgmaxSieveStats)
-    command = "venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}"
+    shell("venvs/common/bin/ms1_find_argmaxes {ms1} {config} {argmaxes} {stats}")
     return argmaxes, stats
 
 
@@ -609,7 +610,7 @@ def extract_ms1_sample_tensors(
     threads: Resource[int] = CORES,
 ):
     tensors = outputs(SampleTensors)
-    command = (
+    shell(
         "venvs/common/bin/ms1_extract_sample_tensors {ms1} {argmaxes} {config} {tensors}"
     )
     return tensors
@@ -624,7 +625,7 @@ def fit_ms1_scale_estimates(
     threads: Resource[int] = CORES,
 ):
     scales = outputs(ScaleEstimates)
-    command = (
+    shell(
         "venvs/common/bin/ms1_fit_scale_estimates {argmaxes} {stats} {tensors} {config} {scales}"
     )
     return scales
@@ -650,7 +651,7 @@ def count_candidate_neighbors(
     threads: Resource[int] = CORES,
 ):
     features = outputs(RawCandidateFeatures)
-    command = (
+    shell(
         "venvs/common/bin/ms1_count_candidate_neighbors {ms1} {scale_estimates} {config} {features}"
     )
     return features
@@ -665,7 +666,7 @@ def score_candidates(
     threads: Resource[int] = CORES,
 ):
     clusters = outputs(RawPrecursorClusters)
-    command = (
+    shell(
         "venvs/common/bin/ms1_score_candidates {ms1} {scale_estimates} {features} {config} {clusters}"
     )
     return clusters
@@ -693,7 +694,7 @@ def annotate_precursor_clusters(
     threads: Resource[int] = CORES,
 ):
     annotated = outputs(AnnotatedPrecursorClusters)
-    command = (
+    shell(
         "venvs/common/bin/ms1_annotate_candidates {tdf} {ms1} {candidates} {scale_estimates} {config} {annotated}"
     )
     return annotated
@@ -708,7 +709,7 @@ def decharge_precursor_clusters(
     threads: Resource[int] = CORES,
 ):
     clusters = outputs(PostprocessedPrecursorClusters)
-    command = (
+    shell(
         "venvs/common/bin/ms1_decharge_candidates {tdf} {ms1} {annotated} {config} {clusters}"
     )
     return clusters
@@ -728,7 +729,7 @@ def transmit_precursors_into_fragment_space(
     threads: Resource[int] = CORES,
 ):
     transpec, precursors = outputs(TransmittedMs1Events, TransmittedPrecursorClusters)
-    command = (
+    shell(
         "venvs/common/bin/transmit_precursors {tdf} {clusters} {config} {transpec}"
         " --output-precursors {precursors} --verbose"
         " && test -f {transpec}/schema.txt"
@@ -743,7 +744,7 @@ def filter_first_precursors(
     threads: Resource[int] = CORES,
 ):
     filtered = outputs(FirstFilterPrecursors)
-    command = (
+    shell(
         "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
     )
     return filtered
@@ -765,7 +766,7 @@ def run_mkpmsms_binary(
     threads: Resource[int] = CORES,
 ):
     pmsms = outputs(Pmsms)
-    command = (
+    shell(
         "{mkpmsms} --fragments {ms2} --transmitted-precursors {transprec}"
         " --precursors {filter_mm} --output {pmsms} --config {config}"
         " --threads {threads} --batch 1024"
@@ -788,7 +789,7 @@ def cut_and_index_precursors(
     threads: Resource[int] = CORES,
 ):
     precursors = outputs(Ms2IndexedPrecursors)
-    command = (
+    shell(
         "venvs/common/bin/cut_and_index_precursors {filter_mm} {pmsms}/dataindex.mmappet {precursors}"
     )
     return precursors
@@ -801,7 +802,7 @@ def filter_pre_sage_precursors(
     threads: Resource[int] = CORES,
 ):
     filtered = outputs(PreSageFilteredPrecursors)
-    command = (
+    shell(
         "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
     )
     return filtered
@@ -810,7 +811,7 @@ def filter_pre_sage_precursors(
 @command
 def write_tof2mz_table(tdf: BrukerD):
     table = outputs(Tof2MzTable)
-    command = "venvs/common/bin/python -m timstofu.cli.write_tof2mz_table {tdf} {table}"
+    shell("venvs/common/bin/python -m timstofu.cli.write_tof2mz_table {tdf} {table}")
     return table
 
 
@@ -821,7 +822,7 @@ def top_cell_precursors(
     ms2: Ms2Events,
 ):
     top_cell = outputs(TopCellPrecursors)
-    command = (
+    shell(
         "venvs/common/bin/python -m timstofu.cli.top_cell_precursors"
         " {precursors} {transmitted} {ms2} {top_cell}"
     )
@@ -841,7 +842,7 @@ def build_precursor_grid_index(
     config: PrecursorNeighborsConfig,
 ):
     grid = outputs(PrecursorGridIndex)
-    command = (
+    shell(
         "venvs/common/bin/build-precursor-grid-index {precursors} {tdf} {grid} --config {config}"
     )
     return grid
@@ -855,7 +856,7 @@ def compute_precursor_neighbors(
     threads: Resource[int] = CORES,
 ):
     csr = outputs(PrecursorNeighborsCsr)
-    command = (
+    shell(
         "git/ionmaidenmetal/build/precursor_neighbors_csr"
         " --boxes-input {grid_index}/boxes.mmappet --index-input {grid_index} --output {csr}"
         " $(venvs/common/bin/precursor-neighbors-params {config} {tdf})"
@@ -873,7 +874,7 @@ def tof_score_filter(
     score = outputs(
         NeighborScore
     )  # no config arg -- confirmed vestigial in the Snakemake rule
-    command = (
+    shell(
         "git/ionmaidenmetal/build/tof_filter --pmsms-path {pmsms} --neighbors-csr-path {neighbors_csr}"
         " --out-path {score} --n-threads {threads}"
     )
@@ -889,7 +890,7 @@ def materialize_tof_filtered_pmsms(
     threads: Resource[int] = CORES,
 ):
     pmsms_out, precursors_out = outputs(TofFilteredPmsms, TofFilteredPrecursors)
-    command = (
+    shell(
         "venvs/common/bin/python -m timstofu.cli.score_based_pmsms_filter"
         " {pmsms} {precursors} {neighbor_score} {pmsms_out} {precursors_out}"
         " --threads {threads} --score-margin {score_margin}"
@@ -910,7 +911,7 @@ def select_recalibration_precursors(
     threads: Resource[int] = CORES,
 ):
     selected = outputs(RecalibrationPrecursors)
-    command = (
+    shell(
         "venvs/common/bin/python -m timstofu.cli.select_recalibration_precursors"
         " {precursors} {config} {selected}"
     )
@@ -935,7 +936,7 @@ def fit_fragment_mz(
     fragment_shift_ppm, recalibrated_tof2mz, tolerance, plot = outputs(
         FragmentShiftPpm, RecalibratedTof2MzTable, FragmentTolerance, FragmentMzFitPlot
     )
-    command = (
+    shell(
         "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments}"
         " {tof2mz} {precursors} {fragment_shift_ppm} {recalibrated_tof2mz} {tolerance} {plot}"
         " --config {config} --fdr {fdr}"
@@ -954,7 +955,7 @@ def fit_precursor_mz(
     mz, tolerance, plot, model = outputs(
         CorrectedMz, PrecursorTolerance, PrecursorMzFitPlot, SerializedMzModel
     )
-    command = (
+    shell(
         "venvs/common/bin/recalibrate-precursors {sage_results_tsv} {precursors}"
         " {mz} {tolerance} {plot} {model} --config {config} --fdr {fdr}"
     )
@@ -972,7 +973,7 @@ def plot_recalibrated_ppm(
     fdr: int | float,
 ):
     plot = outputs(RecalibratedPpmPlot)
-    command = (
+    shell(
         "venvs/common/bin/plot-recalibrated-ppm {initial_sage_results_tsv} {sage_results_tsv}"
         " {initial_matched_fragments} {matched_fragments} {precursor_tolerance} {fragment_tolerance}"
         " {plot} --fdr {fdr}"
@@ -1000,7 +1001,7 @@ def dump_compact_peptides(
     threads: Resource[int] = CORES,
 ):
     compact_peptides = outputs(CompactPeptidesTable)
-    command = (
+    shell(
         "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} --compact {compact_peptides}"
     )
     return compact_peptides
@@ -1022,7 +1023,7 @@ def source_speclib_fragments(
     max_charge: int,
 ):
     fragments = outputs(SpeclibFragments)
-    command = (
+    shell(
         "cp -r --reflink=always {store}/fragments/{name} {fragments}"
         " && venvs/featureprediction/bin/feature-prediction-check-speclib {compact_peptides} {fragments}"
         " --part fragments --min-charge {min_charge} --max-charge {max_charge}"
@@ -1039,7 +1040,7 @@ def source_speclib_rt(
     max_charge: int,
 ):
     rt = outputs(SpeclibRt)
-    command = (
+    shell(
         "cp -r --reflink=always {store}/retention_time/{name} {rt}"
         " && venvs/featureprediction/bin/feature-prediction-check-speclib {compact_peptides} {rt}"
         " --part retention_time --min-charge {min_charge} --max-charge {max_charge}"
@@ -1056,7 +1057,7 @@ def source_speclib_iim(
     max_charge: int,
 ):
     iim = outputs(SpeclibIim)
-    command = (
+    shell(
         "cp -r --reflink=always {store}/inverse_ion_mobility/{name} {iim}"
         " && venvs/featureprediction/bin/feature-prediction-check-speclib {compact_peptides} {iim}"
         " --part inverse_ion_mobility --min-charge {min_charge} --max-charge {max_charge}"
@@ -1116,39 +1117,38 @@ def run_sage(
         SageResultsJson, SageResultsPin, SageResultsTsv, SageMatchedFragments, SageFdrLevels
     )
 
-    def command():
-        workdir = results_json.path.parent
-        spectra = pmsms.path / "data.mmappet" if isinstance(pmsms, Ms2Events) else pmsms.path
-        flags = (
-            f" --tof2mz {_quoted(tof2mz.path)}"
-            f" --compact-peptides {_quoted(compact_peptides.path)}"
+    workdir = results_json.path.parent
+    spectra = pmsms.path / "data.mmappet" if isinstance(pmsms, Ms2Events) else pmsms.path
+    flags = (
+        f" --tof2mz {_quoted(tof2mz.path)}"
+        f" --compact-peptides {_quoted(compact_peptides.path)}"
+    )
+    if predicted_rt is not None:
+        flags += f" --predicted-rt {_quoted(predicted_rt.path)}"
+    if predicted_iim is not None:
+        flags += f" --predicted-iim {_quoted(predicted_iim.path / 'iim.mmappet')}"
+    if speclib_fragments is not None:
+        fragments = speclib_fragments.path
+        flags += (
+            f" --predicted-fragment-intensity-index {_quoted(fragments / 'index.mmappet')}"
+            f" --predicted-fragment-intensity-cache {_quoted(fragments / 'arrays.mmappet')}"
         )
-        if predicted_rt is not None:
-            flags += f" --predicted-rt {_quoted(predicted_rt.path)}"
-        if predicted_iim is not None:
-            flags += f" --predicted-iim {_quoted(predicted_iim.path / 'iim.mmappet')}"
-        if speclib_fragments is not None:
-            fragments = speclib_fragments.path
-            flags += (
-                f" --predicted-fragment-intensity-index {_quoted(fragments / 'index.mmappet')}"
-                f" --predicted-fragment-intensity-cache {_quoted(fragments / 'arrays.mmappet')}"
-            )
-        sage = (
-            f"{_quoted(sage_binary.path)} -f {_quoted(fasta.path)}"
-            f" --annotate-matches --write-pin --output_directory {_quoted(workdir)}"
-            f" --pmsms {_quoted(spectra)} --precursors {_quoted(precursors.path)}{flags}"
-            f" {_quoted(sage_config.path)}"
+    sage = (
+        f"{_quoted(sage_binary.path)} -f {_quoted(fasta.path)}"
+        f" --annotate-matches --write-pin --output_directory {_quoted(workdir)}"
+        f" --pmsms {_quoted(spectra)} --precursors {_quoted(precursors.path)}{flags}"
+        f" {_quoted(sage_config.path)}"
+    )
+    shell(
+        f"{{sage_binary}} --version && {sage}"
+        " && test -f {results_json} && test -f {results_pin}"
+        " && test -f {results_tsv} && test -f {matched_fragments}"
+        " && venvs/common/bin/sage-fdr-levels {results_tsv} {fdr_levels}"
+        + _fdr_levels_record_flags(
+            sage, pmsms, precursors, fasta, sage_config, sage_binary, tof2mz,
+            compact_peptides, predicted_rt, predicted_iim, speclib_fragments,
         )
-        return (
-            f"{{sage_binary}} --version && {sage}"
-            " && test -f {results_json} && test -f {results_pin}"
-            " && test -f {results_tsv} && test -f {matched_fragments}"
-            " && venvs/common/bin/sage-fdr-levels {results_tsv} {fdr_levels}"
-            + _fdr_levels_record_flags(
-                sage, pmsms, precursors, fasta, sage_config, sage_binary, tof2mz,
-                compact_peptides, predicted_rt, predicted_iim, speclib_fragments,
-            )
-        )
+    )
 
     return results_json, results_pin, results_tsv, matched_fragments, fdr_levels
 
@@ -1171,7 +1171,7 @@ def fit_precursor_rt(
     predicted_rt, rt, rt_tolerance, rt_model, plot = outputs(
         PredictedRt, CorrectedRt, RtTolerance, PrecursorCorrectionRtModel, PrecursorCorrectionRtFitPlot
     )
-    command = (
+    shell(
         "venvs/featureprediction/bin/feature-prediction-correct-precursors-rt"
         " {sage_results_tsv} {speclib_rt} {precursors}"
         " {predicted_rt} {rt} {rt_tolerance} {rt_model} {plot}"
@@ -1195,7 +1195,7 @@ def fit_precursor_iim(
     inv_ion_mobility, mobility_tolerance, iim_models, plot = outputs(
         CorrectedIim, MobilityTolerance, PrecursorCorrectionIimModels, PrecursorCorrectionIimFitPlot
     )
-    command = (
+    shell(
         "venvs/featureprediction/bin/feature-prediction-correct-precursors-iim"
         " {sage_results_tsv} {speclib_iim} {precursors}"
         " {inv_ion_mobility} {mobility_tolerance} {iim_models} {plot}"
@@ -1216,28 +1216,27 @@ def update_sage_config(
     """Patches every given tolerance into `sage_config` with `config_set`."""
     recalibrated_sage_config = outputs(SageConfig)
 
-    def command():
-        patches = [
-            ("precursor_tol.ppm", precursor_tolerance, "ppm"),
-            ("fragment_tol.ppm", fragment_tolerance, "ppm"),
-            ("rt_tol_sec", rt_tolerance, "rt_tol_sec"),
-            ("rt_sigma_sec", rt_tolerance, "rt_sigma_sec"),
-            ("mobility_tol", mobility_tolerance, "mobility_tol"),
-            ("iim_sigma", mobility_tolerance, "iim_sigma"),
-        ]
-        current = "{sage_config}"
-        steps = []
-        for target, source, field in patches:
-            if source is None:
-                continue
-            patched = f"{{workdir}}/{target}.json"
-            steps.append(
-                f".venv/bin/python -m necroflow.tools.config_set {current} {patched}"
-                f" --target {target} --source {_quoted(source.path)} --source-field {field}"
-            )
-            current = patched
-        steps.append(f"cp {current} {{recalibrated_sage_config}}")
-        return " && ".join(steps)
+    patches = [
+        ("precursor_tol.ppm", precursor_tolerance, "ppm"),
+        ("fragment_tol.ppm", fragment_tolerance, "ppm"),
+        ("rt_tol_sec", rt_tolerance, "rt_tol_sec"),
+        ("rt_sigma_sec", rt_tolerance, "rt_sigma_sec"),
+        ("mobility_tol", mobility_tolerance, "mobility_tol"),
+        ("iim_sigma", mobility_tolerance, "iim_sigma"),
+    ]
+    current = "{sage_config}"
+    steps = []
+    for target, source, field in patches:
+        if source is None:
+            continue
+        patched = f"{{workdir}}/{target}.json"
+        steps.append(
+            f".venv/bin/python -m necroflow.tools.config_set {current} {patched}"
+            f" --target {target} --source {_quoted(source.path)} --source-field {field}"
+        )
+        current = patched
+    steps.append(f"cp {current} {{recalibrated_sage_config}}")
+    shell(" && ".join(steps))
 
     return recalibrated_sage_config
 
@@ -1252,11 +1251,9 @@ def update_precursors(
 ):
     recalibrated_precursors = outputs(RecalibratedPrecursors)
 
-    def command():
-        columns = (fragment_shift_ppm, mz, rt, inv_ion_mobility)
-        return "venvs/common/bin/update-precursors {precursors} {recalibrated_precursors}" + "".join(
-            f" {_quoted(column.path)}" for column in columns if column is not None
-        )
+    columns = (fragment_shift_ppm, mz, rt, inv_ion_mobility)
+    column_paths = "".join(f" {_quoted(column.path)}" for column in columns if column is not None)
+    shell("venvs/common/bin/update-precursors {precursors} {recalibrated_precursors}" + column_paths)
 
     return recalibrated_precursors
 
@@ -1277,7 +1274,7 @@ def mokapot(
     xgboost_bagging_seed: int = 0,
     threads: Resource[int] = CORES,
 ):
-    """A nested command builder, not a literal template -- lets `--plugin`
+    """Builds its command in Python, not as a literal template -- lets `--plugin`
     be added conditionally without necroflow's string-template placeholders
     needing to express a conditional substring. Same reasoning for
     `--mode`/`--rt-source`/`--iim-source`: passing `rt_source`/`iim_source`
@@ -1330,51 +1327,50 @@ def mokapot(
         MokapotUsedPin, MokapotPeptides, MokapotPsms, MokapotFdrLevels
     )
 
-    def command():
-        workdir = psms.path.parent
-        plugin_flag = f" --plugin {plugin}" if plugin else ""
+    workdir = psms.path.parent
+    plugin_flag = f" --plugin {plugin}" if plugin else ""
 
-        # The threads this call was actually granted, not the machine's core
-        # count: mokapot fans out to `max_workers` fold processes, each running
-        # its own `--*_n_jobs`-wide plugin fit, so reading the machine here would
-        # oversubscribe whatever else the scheduler is running alongside it.
-        n_cores = max(1, int(threads))
-        max_workers = min(folds, n_cores)
-        per_fit_jobs = max(1, n_cores // max_workers)
+    # The threads this call requests, not the machine's core
+    # count: mokapot fans out to `max_workers` fold processes, each running
+    # its own `--*_n_jobs`-wide plugin fit, so reading the machine here would
+    # oversubscribe whatever else the scheduler is running alongside it.
+    n_cores = max(1, int(threads))
+    max_workers = min(folds, n_cores)
+    per_fit_jobs = max(1, n_cores // max_workers)
 
-        plugin_flags = ""
-        if plugin == "xgboost":
-            plugin_flags = f" --xgboost_n_jobs {per_fit_jobs} --xgboost_seed {seed}"
-            if xgboost_bagging_n_estimators > 0:
-                plugin_flags += (
-                    f" --xgboost_bagging_n_estimators {xgboost_bagging_n_estimators}"
-                    f" --xgboost_bagging_max_samples {xgboost_bagging_max_samples}"
-                    f" --xgboost_bagging_seed {xgboost_bagging_seed}"
-                )
-        elif plugin == "lightgbm":
-            plugin_flags = f" --lightgbm_n_jobs {per_fit_jobs} --lightgbm_seed {seed}"
-
-        adapter_flags = ""
-        if rt_source is not None or iim_source is not None:
-            adapter_flags = (
-                f" --mode sage --rt-source {shlex.quote(rt_source or 'none')}"
-                f" --iim-source {shlex.quote(iim_source or 'none')}"
+    plugin_flags = ""
+    if plugin == "xgboost":
+        plugin_flags = f" --xgboost_n_jobs {per_fit_jobs} --xgboost_seed {seed}"
+        if xgboost_bagging_n_estimators > 0:
+            plugin_flags += (
+                f" --xgboost_bagging_n_estimators {xgboost_bagging_n_estimators}"
+                f" --xgboost_bagging_max_samples {xgboost_bagging_max_samples}"
+                f" --xgboost_bagging_seed {xgboost_bagging_seed}"
             )
-        mokapot = (
-            "venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py"
-            f" -i {_quoted(pin.path)} -o {_quoted(used_pin.path)}{adapter_flags}"
-            f" && venvs/mokapot/bin/mokapot {_quoted(used_pin.path)} --dest_dir {_quoted(workdir)}"
-            f" --train_fdr {train_fdr} --test_fdr {test_fdr}"
-            f" --folds {folds} --max_workers {max_workers} --seed {seed} --keep_decoys"
-            f"{plugin_flag}{plugin_flags}"
+    elif plugin == "lightgbm":
+        plugin_flags = f" --lightgbm_n_jobs {per_fit_jobs} --lightgbm_seed {seed}"
+
+    adapter_flags = ""
+    if rt_source is not None or iim_source is not None:
+        adapter_flags = (
+            f" --mode sage --rt-source {shlex.quote(rt_source or 'none')}"
+            f" --iim-source {shlex.quote(iim_source or 'none')}"
         )
-        return (
-            f"{mokapot} && test -f {{peptides}} && test -f {{psms}}"
-            " && test -f {workdir}/mokapot.decoy.psms.txt"
-            " && venvs/common/bin/mokapot-fdr-levels {psms} {peptides}"
-            " {workdir}/mokapot.decoy.psms.txt {sage_results_tsv} {fdr_levels}"
-            + _fdr_levels_record_flags(mokapot, pin, sage_results_tsv)
-        )
+    mokapot = (
+        "venvs/mokapot/bin/python scripts/mokapot_pin_adapter.py"
+        f" -i {_quoted(pin.path)} -o {_quoted(used_pin.path)}{adapter_flags}"
+        f" && venvs/mokapot/bin/mokapot {_quoted(used_pin.path)} --dest_dir {_quoted(workdir)}"
+        f" --train_fdr {train_fdr} --test_fdr {test_fdr}"
+        f" --folds {folds} --max_workers {max_workers} --seed {seed} --keep_decoys"
+        f"{plugin_flag}{plugin_flags}"
+    )
+    shell(
+        f"{mokapot} && test -f {{peptides}} && test -f {{psms}}"
+        " && test -f {workdir}/mokapot.decoy.psms.txt"
+        " && venvs/common/bin/mokapot-fdr-levels {psms} {peptides}"
+        " {workdir}/mokapot.decoy.psms.txt {sage_results_tsv} {fdr_levels}"
+        + _fdr_levels_record_flags(mokapot, pin, sage_results_tsv)
+    )
 
     return used_pin, peptides, psms, fdr_levels
 
@@ -1386,7 +1382,7 @@ def sage_summarize(
     fdr: int | float,
 ):
     summary = outputs(SageSummary)
-    command = (
+    shell(
         "venvs/common/bin/sage-summarize-raw {sage_results_tsv} {summary} --fdr {fdr}"
     )
     return summary
@@ -1395,7 +1391,7 @@ def sage_summarize(
 @command
 def filter_sage_results(sage_results_tsv: SageResultsTsv, fdr: int | float):
     confident_psms = outputs(ConfidentPsmsParquet)
-    command = (
+    shell(
         "venvs/common/bin/sage-filter {sage_results_tsv} {confident_psms} --fdr {fdr}"
     )
     return confident_psms
@@ -1411,7 +1407,7 @@ def score_comparison(
     """mkpmsms scores of the peaks SAGE matched for confident PSMs (its
     `fragment_pmsms_row`) against all other pmsms peaks."""
     plots = outputs(ScoreComparisonPlots)
-    command = (
+    shell(
         "venvs/common/bin/sage_score_mapper {pmsms} {confident_psms} {matched_fragments}"
         " --config {config} -o {plots}"
     )
@@ -1426,7 +1422,7 @@ def convert_search_pmsms_to_mzml(
     threads: Resource[int] = CORES,
 ):
     mzml, idmap = outputs(TofFilteredMzml, TofFilteredMzmlIdmap)
-    command = (
+    shell(
         "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
         " --threads {threads} --numpress --zlib-level 9 --tof2mz {tof2mz}"
         " && test -f {mzml} && test -f {idmap}/schema.txt"
@@ -1446,7 +1442,7 @@ def convert_search_pmsms_to_mgf(
     threads: Resource[int] = CORES,
 ):
     mgf = outputs(TofFilteredMgf)
-    command = (
+    shell(
         "(chattr +m {workdir} 2>/dev/null || true)"
         " && venvs/common/bin/msms2mgf_multicharge {pmsms} {precursors} {config_path} {mgf}"
         " --threads_cnt {threads} --tof2mz {tof2mz}"
@@ -1458,7 +1454,7 @@ def convert_search_pmsms_to_mgf(
 @command
 def compress_with_pigz(path: Node, threads: Resource[int] = CORES):
     archive = outputs(TarGz)
-    command = (
+    shell(
         "tar -cf - -C $(dirname {path}) $(basename {path}) | pigz -p {threads} > {archive}"
         " && test -f {archive}"
     )
