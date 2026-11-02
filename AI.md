@@ -28,9 +28,11 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   DAG edges; `threads: Resource[int] = CORES` reserves cores, outside node identity.
 - The programs a rule runs are inputs too, so changing one reruns the steps using it:
   binaries (`symlink(Tdf2msBinary, ...)`, called as `{tdf2ms}`) and, for Python tools, the
-  module the launcher imports (`tool: PythonModule`, from `tool_module(name)` and
-  `TOOL_MODULES`). Edits deeper in a Python package are not tracked; force those with
-  `nf run --invalidate <label>`. System tools (pigz, tar, FragPipe) are not tracked.
+  module the launcher imports: one `PythonModule` subclass per tool with its `source`
+  path (`tool: FindArgmaxesModule`, passed as `tool_module(FindArgmaxesModule)`), so a
+  step rejects another tool's module. Edits deeper in a Python package are not tracked;
+  force those with `nf run --invalidate <label>`. System tools (pigz, tar, FragPipe) are
+  not tracked.
 - Workflows (`ionmaiden_pipeline(P, config)`, `fragpipe_synthetic_pipeline(P, config)`)
   are decorated `@workflow`, so `P` is the active Pipeline while one runs and rules are
   called without it: `P.some_label = some_rule(parent_node, ..., scalar_kwarg=...)`.

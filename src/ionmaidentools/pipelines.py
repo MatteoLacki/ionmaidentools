@@ -98,10 +98,172 @@ class Pmsms2mzmlBinary(Executable):
 
 
 class PythonModule(Node):
-    """The module a Python tool's launcher imports, an input of the steps running the tool
-    so that editing it reruns them. Edits deeper in its package are not tracked."""
+    """The module a Python tool's launcher imports, at `source`: an input of the steps
+    running the tool, so that editing it reruns them. Edits deeper in its package are not
+    tracked. One subclass per tool, so a step accepts only its own tool's module."""
 
-    filename = "module.py"
+    source: str
+
+
+TIMSTOFU = "git/timstofu/src/timstofu"
+SEARCHOPS_CLI = "git/searchops/src/searchops/cli"
+
+
+class FindArgmaxesModule(PythonModule):
+    filename = "find_argmaxes.py"
+    source = f"{TIMSTOFU}/scale_estimation/find_argmaxes.py"
+
+
+class ExtractSampleTensorsModule(PythonModule):
+    filename = "extract_sample_tensors.py"
+    source = f"{TIMSTOFU}/scale_estimation/extract_sample_tensors.py"
+
+
+class FitScaleEstimatesModule(PythonModule):
+    filename = "fit_scale_estimates.py"
+    source = f"{TIMSTOFU}/scale_estimation/fit_scale_estimates.py"
+
+
+class CountNeighborsModule(PythonModule):
+    filename = "count_neighbors.py"
+    source = f"{TIMSTOFU}/candidate_selection/count_neighbors.py"
+
+
+class ScoreCandidatesModule(PythonModule):
+    filename = "score_candidates.py"
+    source = f"{TIMSTOFU}/candidate_selection/score_candidates.py"
+
+
+class AnnotateCandidatesModule(PythonModule):
+    filename = "annotate.py"
+    source = f"{TIMSTOFU}/candidate_postprocessing/annotate.py"
+
+
+class DechargeCandidatesModule(PythonModule):
+    filename = "decharge.py"
+    source = f"{TIMSTOFU}/candidate_postprocessing/decharge.py"
+
+
+class FilterMmappetModule(PythonModule):
+    filename = "filter_mmappet.py"
+    source = f"{TIMSTOFU}/cli/filter_mmappet.py"
+
+
+class WriteTof2mzTableModule(PythonModule):
+    filename = "write_tof2mz_table.py"
+    source = f"{TIMSTOFU}/cli/write_tof2mz_table.py"
+
+
+class TopCellPrecursorsModule(PythonModule):
+    filename = "top_cell_precursors.py"
+    source = f"{TIMSTOFU}/cli/top_cell_precursors.py"
+
+
+class ScoreBasedPmsmsFilterModule(PythonModule):
+    filename = "score_based_pmsms_filter.py"
+    source = f"{TIMSTOFU}/cli/score_based_pmsms_filter.py"
+
+
+class SelectRecalibrationPrecursorsModule(PythonModule):
+    filename = "select_recalibration_precursors.py"
+    source = f"{TIMSTOFU}/cli/select_recalibration_precursors.py"
+
+
+class TransmitPrecursorsModule(PythonModule):
+    filename = "cli.py"
+    source = "git/quadops/src/quadops/fragops/cli.py"
+
+
+class CutAndIndexPrecursorsModule(PythonModule):
+    filename = "cut_and_index_precursors.py"
+    source = "git/mgfops/mgf_ops/cli/cut_and_index_precursors.py"
+
+
+class MgfWritersModule(PythonModule):
+    filename = "writers.py"
+    source = "git/mgfops/mgf_ops/writers.py"
+
+
+class BuildPrecursorGridIndexModule(PythonModule):
+    filename = "build_precursor_grid_index.py"
+    source = "git/boxing/src/boxing/cli/build_precursor_grid_index.py"
+
+
+class PrecursorNeighborsParamsModule(PythonModule):
+    filename = "precursor_neighbors_params.py"
+    source = "git/boxing/src/boxing/cli/precursor_neighbors_params.py"
+
+
+class RecalibratePmsmsMzModule(PythonModule):
+    filename = "recalibrate_pmsms_mz.py"
+    source = f"{SEARCHOPS_CLI}/recalibrate_pmsms_mz.py"
+
+
+class RecalibratePrecursorsModule(PythonModule):
+    filename = "recalibrate_precursors.py"
+    source = f"{SEARCHOPS_CLI}/recalibrate_precursors.py"
+
+
+class PlotRecalibratedPpmModule(PythonModule):
+    filename = "plot_recalibrated_ppm.py"
+    source = f"{SEARCHOPS_CLI}/plot_recalibrated_ppm.py"
+
+
+class UpdatePrecursorsModule(PythonModule):
+    filename = "update_precursors.py"
+    source = f"{SEARCHOPS_CLI}/update_precursors.py"
+
+
+class FdrLevelsModule(PythonModule):
+    filename = "fdr_levels.py"
+    source = f"{SEARCHOPS_CLI}/fdr_levels.py"
+
+
+class SageSummarizeRawModule(PythonModule):
+    filename = "sage_summarize_raw.py"
+    source = f"{SEARCHOPS_CLI}/sage_summarize_raw.py"
+
+
+class SageFilterModule(PythonModule):
+    filename = "sage_filter.py"
+    source = f"{SEARCHOPS_CLI}/sage_filter.py"
+
+
+class SageScoreMapperModule(PythonModule):
+    filename = "sage_score_mapper.py"
+    source = f"{SEARCHOPS_CLI}/sage_score_mapper.py"
+
+
+class FeaturePredictionCliModule(PythonModule):
+    filename = "cli.py"
+    source = "git/featureprediction/src/feature_prediction/cli.py"
+
+
+class ConfigSetModule(PythonModule):
+    filename = "config_set.py"
+    source = "git/necroflow/src/necroflow/tools/config_set.py"
+
+
+class MokapotPinAdapterModule(PythonModule):
+    filename = "mokapot_pin_adapter.py"
+    source = "scripts/mokapot_pin_adapter.py"
+
+
+class MokapotPluginModule(PythonModule):
+    """A mokapot plugin's module, by its `--plugin` name in `MOKAPOT_PLUGIN_MODULES`."""
+
+
+class MokapotXgboostModule(MokapotPluginModule):
+    filename = "plugin.py"
+    source = "git/mokapot-xgboost-plugin/src/mokapot_xgboost/plugin.py"
+
+
+class MokapotLightgbmModule(MokapotPluginModule):
+    filename = "plugin.py"
+    source = "git/mokapot-lightgbm-plugin/src/mokapot_lightgbm/plugin.py"
+
+
+MOKAPOT_PLUGIN_MODULES = {"xgboost": MokapotXgboostModule, "lightgbm": MokapotLightgbmModule}
 
 
 # --- compute artifact node types ---
@@ -505,47 +667,9 @@ class PrecursorCorrectionIimFitPlot(Png):
     filename = "precursor_correction_iim_fit_plot.png"
 
 
-# The module each Python tool's launcher imports, by tool name.
-TIMSTOFU = "git/timstofu/src/timstofu"
-SEARCHOPS_CLI = "git/searchops/src/searchops/cli"
-TOOL_MODULES = {
-    "ms1_find_argmaxes": f"{TIMSTOFU}/scale_estimation/find_argmaxes.py",
-    "ms1_extract_sample_tensors": f"{TIMSTOFU}/scale_estimation/extract_sample_tensors.py",
-    "ms1_fit_scale_estimates": f"{TIMSTOFU}/scale_estimation/fit_scale_estimates.py",
-    "ms1_count_candidate_neighbors": f"{TIMSTOFU}/candidate_selection/count_neighbors.py",
-    "ms1_score_candidates": f"{TIMSTOFU}/candidate_selection/score_candidates.py",
-    "ms1_annotate_candidates": f"{TIMSTOFU}/candidate_postprocessing/annotate.py",
-    "ms1_decharge_candidates": f"{TIMSTOFU}/candidate_postprocessing/decharge.py",
-    "filter_mmappet": f"{TIMSTOFU}/cli/filter_mmappet.py",
-    "write_tof2mz_table": f"{TIMSTOFU}/cli/write_tof2mz_table.py",
-    "top_cell_precursors": f"{TIMSTOFU}/cli/top_cell_precursors.py",
-    "score_based_pmsms_filter": f"{TIMSTOFU}/cli/score_based_pmsms_filter.py",
-    "select_recalibration_precursors": f"{TIMSTOFU}/cli/select_recalibration_precursors.py",
-    "transmit_precursors": "git/quadops/src/quadops/fragops/cli.py",
-    "cut_and_index_precursors": "git/mgfops/mgf_ops/cli/cut_and_index_precursors.py",
-    "msms2mgf": "git/mgfops/mgf_ops/writers.py",
-    "build-precursor-grid-index": "git/boxing/src/boxing/cli/build_precursor_grid_index.py",
-    "precursor-neighbors-params": "git/boxing/src/boxing/cli/precursor_neighbors_params.py",
-    "recalibrate-pmsms-mz": f"{SEARCHOPS_CLI}/recalibrate_pmsms_mz.py",
-    "recalibrate-precursors": f"{SEARCHOPS_CLI}/recalibrate_precursors.py",
-    "plot-recalibrated-ppm": f"{SEARCHOPS_CLI}/plot_recalibrated_ppm.py",
-    "update-precursors": f"{SEARCHOPS_CLI}/update_precursors.py",
-    "fdr-levels": f"{SEARCHOPS_CLI}/fdr_levels.py",
-    "sage-summarize-raw": f"{SEARCHOPS_CLI}/sage_summarize_raw.py",
-    "sage-filter": f"{SEARCHOPS_CLI}/sage_filter.py",
-    "sage_score_mapper": f"{SEARCHOPS_CLI}/sage_score_mapper.py",
-    "feature-prediction": "git/featureprediction/src/feature_prediction/cli.py",
-    "config_set": "git/necroflow/src/necroflow/tools/config_set.py",
-    "mokapot_pin_adapter": "scripts/mokapot_pin_adapter.py",
-    "mokapot-xgboost": "git/mokapot-xgboost-plugin/src/mokapot_xgboost/plugin.py",
-    "mokapot-lightgbm": "git/mokapot-lightgbm-plugin/src/mokapot_lightgbm/plugin.py",
-    "simulate_peptides_to_pmsms": "scripts/simulate_peptides_to_pmsms.py",
-}
-
-
-def tool_module(name: str) -> PythonModule:
-    """`TOOL_MODULES[name]` as an input, inside a workflow."""
-    return symlink(PythonModule, TOOL_MODULES[name])
+def tool_module(module: type[PythonModule]) -> PythonModule:
+    """`module` linked from its `source`, as an input, inside a workflow."""
+    return symlink(module, module.source)
 
 
 # --- compute rules ---
@@ -630,7 +754,7 @@ def write_scale_estimation_config(text: str):
 def find_ms1_argmaxes(
     ms1: Ms1Events,
     config: ScaleEstimationConfig,
-    tool: PythonModule,
+    tool: FindArgmaxesModule,
     threads: Resource[int] = CORES,
 ):
     """The most intense MS1 events that are local intensity maxima, snapped to their peak
@@ -645,7 +769,7 @@ def extract_ms1_sample_tensors(
     ms1: Ms1Events,
     argmaxes: ArgmaxSample,
     config: ScaleEstimationConfig,
-    tool: PythonModule,
+    tool: ExtractSampleTensorsModule,
     threads: Resource[int] = CORES,
 ):
     """A small (tof, urt, scan) intensity tensor around each argmax (scale estimation, stage
@@ -663,7 +787,7 @@ def fit_ms1_scale_estimates(
     stats: ArgmaxSieveStats,
     tensors: SampleTensors,
     config: ScaleEstimationConfig,
-    tool: PythonModule,
+    tool: FitScaleEstimatesModule,
     threads: Resource[int] = CORES,
 ):
     """Peak width along tof, urt and scan as a function of position (`loc2scale`), fitted on
@@ -694,7 +818,7 @@ def count_candidate_neighbors(
     ms1: Ms1Events,
     scale_estimates: ScaleEstimates,
     config: PrecursorNeighborCountConfig,
-    tool: PythonModule,
+    tool: CountNeighborsModule,
     threads: Resource[int] = CORES,
 ):
     """Each MS1 event's neighbour count and TIC within its scaled box: candidate selection's
@@ -712,7 +836,7 @@ def score_candidates(
     scale_estimates: ScaleEstimates,
     features: RawCandidateFeatures,
     config: PrecursorCandidateSelectionConfig,
-    tool: PythonModule,
+    tool: ScoreCandidatesModule,
     threads: Resource[int] = CORES,
 ):
     """Precursor candidates: events with enough neighbours, scored by the configured method
@@ -745,7 +869,7 @@ def annotate_precursor_clusters(
     candidates: RawPrecursorClusters,
     scale_estimates: ScaleEstimates,
     config: PrecursorAnnotationConfig,
-    tool: PythonModule,
+    tool: AnnotateCandidatesModule,
     threads: Resource[int] = CORES,
 ):
     """Candidates resolved over overlapping boxes, re-centred, and given m/z, RT, 1/K0,
@@ -763,7 +887,7 @@ def decharge_precursor_clusters(
     ms1: Ms1Events,
     annotated: AnnotatedPrecursorClusters,
     config: PostprocessingConfig,
-    tool: PythonModule,
+    tool: DechargeCandidatesModule,
     threads: Resource[int] = CORES,
 ):
     """The annotated precursors with charges from their isotope envelopes and a
@@ -787,7 +911,7 @@ def transmit_precursors_into_fragment_space(
     tdf: BrukerD,
     clusters: PostprocessedPrecursorClusters,
     config: PrecursorTransmissionConfig,
-    tool: PythonModule,
+    tool: TransmitPrecursorsModule,
     threads: Resource[int] = CORES,
 ):
     """The MS2 (frame, scan) cells the quadrupole transmits each precursor into, most
@@ -804,7 +928,7 @@ def transmit_precursors_into_fragment_space(
 @command
 def filter_first_precursors(
     precursors: TransmittedPrecursorClusters,
-    tool: PythonModule,
+    tool: FilterMmappetModule,
     filter: str,
     threads: Resource[int] = CORES,
 ):
@@ -856,7 +980,7 @@ def run_mkpmsms_binary(
 def cut_and_index_precursors(
     filter_mm: FirstFilterPrecursors,
     pmsms: Pmsms,
-    tool: PythonModule,
+    tool: CutAndIndexPrecursorsModule,
     threads: Resource[int] = CORES,
 ):
     """The precursors that got fragments, with their pmsms slice (`fragment_spectrum_start`,
@@ -872,7 +996,7 @@ def cut_and_index_precursors(
 @command
 def filter_pre_sage_precursors(
     precursors: Ms2IndexedPrecursors,
-    tool: PythonModule,
+    tool: FilterMmappetModule,
     filter: str,
     threads: Resource[int] = CORES,
 ):
@@ -885,7 +1009,7 @@ def filter_pre_sage_precursors(
 
 
 @command
-def write_tof2mz_table(tdf: BrukerD, tool: PythonModule):
+def write_tof2mz_table(tdf: BrukerD, tool: WriteTof2mzTableModule):
     """The `.d`'s TOF-to-m/z calibration as a dense table, through which SAGE and the
     exports read fragment m/z."""
     table = outputs(Tof2MzTable)
@@ -898,7 +1022,7 @@ def top_cell_precursors(
     precursors: RecalibrationPrecursors,
     transmitted: TransmittedMs1Events,
     ms2: Ms2Events,
-    tool: PythonModule,
+    tool: TopCellPrecursorsModule,
 ):
     """The recalibration precursors pointed at their most probable raw MS2 spectrum, for
     SAGE to search `ms2_events` in place."""
@@ -923,7 +1047,7 @@ def build_precursor_grid_index(
     precursors: PreSageFilteredPrecursors,
     tdf: BrukerD,
     config: PrecursorNeighborsConfig,
-    tool: PythonModule,
+    tool: BuildPrecursorGridIndexModule,
 ):
     """Each precursor's (frame, scan, m/z) box, and a 3D grid index over the boxes."""
     grid = outputs(PrecursorGridIndex)
@@ -939,7 +1063,7 @@ def compute_precursor_neighbors(
     tdf: BrukerD,
     config: PrecursorNeighborsConfig,
     precursor_neighbors_csr: PrecursorNeighborsCsrBinary,
-    tool: PythonModule,
+    tool: PrecursorNeighborsParamsModule,
     threads: Resource[int] = CORES,
 ):
     """Each precursor's overlapping neighbours, as CSR keyed by `precursor_idx`."""
@@ -977,7 +1101,7 @@ def materialize_tof_filtered_pmsms(
     pmsms: Pmsms,
     precursors: PreSageFilteredPrecursors,
     neighbor_score: NeighborScore,
-    tool: PythonModule,
+    tool: ScoreBasedPmsmsFilterModule,
     score_margin: int | float,
     threads: Resource[int] = CORES,
 ):
@@ -1004,7 +1128,7 @@ def write_recalibration_precursor_selection_config(text: str):
 def select_recalibration_precursors(
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationPrecursorSelectionConfig,
-    tool: PythonModule,
+    tool: SelectRecalibrationPrecursorsModule,
     threads: Resource[int] = CORES,
 ):
     """The precursors the first (recalibration) search uses, chosen after sorting by
@@ -1031,7 +1155,7 @@ def fit_fragment_mz(
     tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
-    tool: PythonModule,
+    tool: RecalibratePmsmsMzModule,
     fdr: int | float,
 ):
     """Fragment m/z correction fitted on the first search's confident matches: a
@@ -1053,7 +1177,7 @@ def fit_precursor_mz(
     sage_results_tsv: SageResultsTsv,
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
-    tool: PythonModule,
+    tool: RecalibratePrecursorsModule,
     fdr: int | float,
     threads: Resource[int] = CORES,
 ):
@@ -1077,7 +1201,7 @@ def plot_recalibrated_ppm(
     matched_fragments: SageMatchedFragments,
     precursor_tolerance: PrecursorTolerance,
     fragment_tolerance: FragmentTolerance,
-    tool: PythonModule,
+    tool: PlotRecalibratedPpmModule,
     fdr: int | float,
 ):
     """Precursor and fragment ppm errors before and after recalibration, with the
@@ -1130,7 +1254,7 @@ def _json_text(obj) -> str:
 def check_speclib_fragments(
     compact_peptides: CompactPeptidesTable,
     fragments: SpeclibFragments,
-    tool: PythonModule,
+    tool: FeaturePredictionCliModule,
     min_charge: int,
     max_charge: int,
 ):
@@ -1149,7 +1273,7 @@ def check_speclib_fragments(
 def check_speclib_rt(
     compact_peptides: CompactPeptidesTable,
     rt: SpeclibRt,
-    tool: PythonModule,
+    tool: FeaturePredictionCliModule,
     min_charge: int,
     max_charge: int,
 ):
@@ -1168,7 +1292,7 @@ def check_speclib_rt(
 def check_speclib_iim(
     compact_peptides: CompactPeptidesTable,
     iim: SpeclibIim,
-    tool: PythonModule,
+    tool: FeaturePredictionCliModule,
     min_charge: int,
     max_charge: int,
 ):
@@ -1206,7 +1330,7 @@ def run_sage(
     sage_binary: SageBinary,
     tof2mz: Tof2MzTable,
     compact_peptides: CompactPeptidesTable,
-    fdr_levels_tool: PythonModule,
+    fdr_levels_tool: FdrLevelsModule,
     predicted_rt: PredictedRt | None = None,
     predicted_iim: SpeclibIim | None = None,
     speclib_fragments: SpeclibFragments | None = None,
@@ -1277,7 +1401,7 @@ def fit_precursor_rt(
     sage_results_tsv: SageResultsTsv,
     speclib_rt: SpeclibRt,
     precursors: PreSageFilteredPrecursors,
-    tool: PythonModule,
+    tool: FeaturePredictionCliModule,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
@@ -1306,7 +1430,7 @@ def fit_precursor_iim(
     sage_results_tsv: SageResultsTsv,
     speclib_iim: SpeclibIim,
     precursors: PreSageFilteredPrecursors,
-    tool: PythonModule,
+    tool: FeaturePredictionCliModule,
     tolerance_lo: int | float,
     tolerance_hi: int | float,
     tolerance_method: str,
@@ -1331,7 +1455,7 @@ def fit_precursor_iim(
 @command
 def update_sage_config(
     sage_config: SageConfig,
-    tool: PythonModule,
+    tool: ConfigSetModule,
     precursor_tolerance: PrecursorTolerance | None = None,
     fragment_tolerance: FragmentTolerance | None = None,
     rt_tolerance: RtTolerance | None = None,
@@ -1368,7 +1492,7 @@ def update_sage_config(
 @command
 def update_precursors(
     precursors: PreSageFilteredPrecursors,
-    tool: PythonModule,
+    tool: UpdatePrecursorsModule,
     fragment_shift_ppm: FragmentShiftPpm | None = None,
     mz: CorrectedMz | None = None,
     rt: CorrectedRt | None = None,
@@ -1389,9 +1513,9 @@ def update_precursors(
 def mokapot(
     pin: Pin,
     sage_results_tsv: SageResultsTsv,
-    pin_adapter: PythonModule,
-    fdr_levels_tool: PythonModule,
-    plugin_module: PythonModule | None = None,
+    pin_adapter: MokapotPinAdapterModule,
+    fdr_levels_tool: FdrLevelsModule,
+    plugin_module: MokapotPluginModule | None = None,
     train_fdr: float = 0.05,
     test_fdr: float = 0.01,
     folds: int = 3,
@@ -1509,7 +1633,7 @@ def mokapot(
 def sage_summarize(
     sage_results_tsv: SageResultsTsv,
     sage_summarize_module: SageSummarizeModule,
-    tool: PythonModule,
+    tool: SageSummarizeRawModule,
     fdr: int | float,
 ):
     """A summary of SAGE's results at `fdr`."""
@@ -1522,7 +1646,7 @@ def sage_summarize(
 
 @command
 def filter_sage_results(
-    sage_results_tsv: SageResultsTsv, tool: PythonModule, fdr: int | float
+    sage_results_tsv: SageResultsTsv, tool: SageFilterModule, fdr: int | float
 ):
     """SAGE's PSMs at `fdr`, as parquet."""
     confident_psms = outputs(ConfidentPsmsParquet)
@@ -1538,7 +1662,7 @@ def score_comparison(
     confident_psms: ConfidentPsmsParquet,
     matched_fragments: SageMatchedFragments,
     config: PseudomsmsConfig,
-    tool: PythonModule,
+    tool: SageScoreMapperModule,
 ):
     """mkpmsms scores of the peaks SAGE matched for confident PSMs (its
     `fragment_pmsms_row`) against all other pmsms peaks."""
@@ -1576,7 +1700,7 @@ def convert_search_pmsms_to_mgf(
     pmsms: Pmsms,
     tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
-    tool: PythonModule,
+    tool: MgfWritersModule,
     config_path: str,
     threads: Resource[int] = CORES,
 ):
@@ -1647,18 +1771,18 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     )
     P.argmaxes, P.argmax_sieve_stats = find_ms1_argmaxes(
         P.ms1_events, P.scale_estimation_config,
-        tool=tool_module("ms1_find_argmaxes"),
+        tool=tool_module(FindArgmaxesModule),
     )
     P.sample_tensors = extract_ms1_sample_tensors(
         P.ms1_events, P.argmaxes, P.scale_estimation_config,
-        tool=tool_module("ms1_extract_sample_tensors"),
+        tool=tool_module(ExtractSampleTensorsModule),
     )
     P.scale_estimates = fit_ms1_scale_estimates(
         P.argmaxes,
         P.argmax_sieve_stats,
         P.sample_tensors,
         P.scale_estimation_config,
-        tool=tool_module("ms1_fit_scale_estimates"),
+        tool=tool_module(FitScaleEstimatesModule),
     )
 
     # Precursor Selection
@@ -1672,14 +1796,14 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.ms1_events,
         P.scale_estimates,
         P.precursor_neighbor_count_config,
-        tool=tool_module("ms1_count_candidate_neighbors"),
+        tool=tool_module(CountNeighborsModule),
     )
     P.raw_precursor_clusters = score_candidates(
         P.ms1_events,
         P.scale_estimates,
         P.raw_candidate_features,
         P.precursor_candidate_selection_config,
-        tool=tool_module("ms1_score_candidates"),
+        tool=tool_module(ScoreCandidatesModule),
     )
 
     # Precursor Postprocessing
@@ -1695,14 +1819,14 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         P.raw_precursor_clusters,
         P.scale_estimates,
         P.precursor_annotation_config,
-        tool=tool_module("ms1_annotate_candidates"),
+        tool=tool_module(AnnotateCandidatesModule),
     )
     P.postprocessed_precursor_clusters = decharge_precursor_clusters(
         P.tdf,
         P.ms1_events,
         P.annotated_precursor_clusters,
         P.postprocessing_config,
-        tool=tool_module("ms1_decharge_candidates"),
+        tool=tool_module(DechargeCandidatesModule),
     )
 
     # Precursor Transmission
@@ -1714,14 +1838,14 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.tdf,
             P.postprocessed_precursor_clusters,
             P.precursor_transmission_config,
-            tool=tool_module("transmit_precursors"),
+            tool=tool_module(TransmitPrecursorsModule),
         )
     )
 
     P.first_filter_precursors = filter_first_precursors(
         P.transmitted_precursor_clusters,
         filter=cfg.precursor_filters.mkpmsms.get("filter", ""),
-        tool=tool_module("filter_mmappet"),
+        tool=tool_module(FilterMmappetModule),
     )
 
     # Pseudo-MS/MS Assembly
@@ -1737,13 +1861,13 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # Precursor Indexing
     P.ms2indexed_precursors = cut_and_index_precursors(
         P.first_filter_precursors, P.pmsms,
-        tool=tool_module("cut_and_index_precursors"),
+        tool=tool_module(CutAndIndexPrecursorsModule),
     )
 
     P.pre_sage_filtered_precursors = filter_pre_sage_precursors(
         P.ms2indexed_precursors,
         filter=cfg.precursor_filters.pre_sage.get("filter", ""),
-        tool=tool_module("filter_mmappet"),
+        tool=tool_module(FilterMmappetModule),
     )
 
     # Score competition: each precursor's ToF scores against its neighbors'
@@ -1758,7 +1882,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.pre_sage_filtered_precursors,
             P.tdf,
             P.precursor_neighbors_config,
-            tool=tool_module("build-precursor-grid-index"),
+            tool=tool_module(BuildPrecursorGridIndexModule),
         )
         P.precursor_neighbors_csr = compute_precursor_neighbors(
             P.precursor_grid_index,
@@ -1767,7 +1891,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             precursor_neighbors_csr=symlink(
                 PrecursorNeighborsCsrBinary, "git/ionmaidenmetal/build/precursor_neighbors_csr"
             ),
-            tool=tool_module("precursor-neighbors-params"),
+            tool=tool_module(PrecursorNeighborsParamsModule),
         )
         P.neighbor_score = tof_score_filter(
             P.pmsms,
@@ -1779,13 +1903,13 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.pre_sage_filtered_precursors,
             P.neighbor_score,
             score_margin=cfg.score_competition.score_margin,
-            tool=tool_module("score_based_pmsms_filter"),
+            tool=tool_module(ScoreBasedPmsmsFilterModule),
         )
     else:
         P.search_pmsms = P.pmsms
         P.search_precursors = P.pre_sage_filtered_precursors
 
-    P.tof2mz_table = write_tof2mz_table(P.tdf, tool=tool_module("write_tof2mz_table"))
+    P.tof2mz_table = write_tof2mz_table(P.tdf, tool=tool_module(WriteTof2mzTableModule))
     current_tof2mz_table = P.tof2mz_table
     current_precursors = P.search_precursors
 
@@ -1825,7 +1949,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.compact_peptides,
                 symlink(SpeclibFragments, speclib_path("fragments")),
                 **charges,
-                tool=tool_module("feature-prediction"),
+                tool=tool_module(FeaturePredictionCliModule),
             )
             if "fragments" in speclib
             else None
@@ -1841,7 +1965,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             P.recalibration_precursors = select_recalibration_precursors(
                 P.search_precursors,
                 P.recalibration_precursor_selection_config,
-                tool=tool_module("select_recalibration_precursors"),
+                tool=tool_module(SelectRecalibrationPrecursorsModule),
             )
             if "recalibration_top_cell" in cfg:
                 # The recalibration search reads each sampled precursor's most
@@ -1849,7 +1973,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 # the main pmsms and precursors.
                 P.recalibration_top_cell_precursors = top_cell_precursors(
                     P.recalibration_precursors, P.transmitted_ms1events, P.ms2_events,
-                    tool=tool_module("top_cell_precursors"),
+                    tool=tool_module(TopCellPrecursorsModule),
                 )
                 recalibration_spectra = P.ms2_events
                 recalibration_search_precursors = P.recalibration_top_cell_precursors
@@ -1870,7 +1994,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
                 compact_peptides=P.compact_peptides,
-                fdr_levels_tool=tool_module("fdr-levels"),
+                fdr_levels_tool=tool_module(FdrLevelsModule),
             )
             corrections = {}  # update_precursors' columns
             tolerances = {}  # update_sage_config's tolerances
@@ -1890,7 +2014,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.search_precursors,
                     P.recalibration_config,
                     fdr=cfg.sage_summarize.fdr,
-                    tool=tool_module("recalibrate-pmsms-mz"),
+                    tool=tool_module(RecalibratePmsmsMzModule),
                 )
                 (
                     P.corrected_mz,
@@ -1902,7 +2026,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.search_precursors,
                     P.recalibration_config,
                     fdr=cfg.sage_summarize.fdr,
-                    tool=tool_module("recalibrate-precursors"),
+                    tool=tool_module(RecalibratePrecursorsModule),
                 )
                 corrections.update(fragment_shift_ppm=P.fragment_shift_ppm, mz=P.corrected_mz)
                 tolerances.update(
@@ -1916,7 +2040,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.compact_peptides,
                     symlink(SpeclibRt, speclib_path("retention_time")),
                     **charges,
-                    tool=tool_module("feature-prediction"),
+                    tool=tool_module(FeaturePredictionCliModule),
                 )
                 rt_tolerance_lo, rt_tolerance_hi = cfg.recalibration.rt[
                     "tolerance_percentiles"
@@ -1939,7 +2063,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     tolerance_method=rt_tolerance_method,
                     rt_fit=cfg.recalibration.rt.get("fit", "robust"),
                     fdr=cfg.sage_summarize.fdr,
-                    tool=tool_module("feature-prediction"),
+                    tool=tool_module(FeaturePredictionCliModule),
                 )
                 corrections["rt"] = P.corrected_rt
                 predictions["predicted_rt"] = P.predicted_rt
@@ -1949,7 +2073,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     P.compact_peptides,
                     symlink(SpeclibIim, speclib_path("inverse_ion_mobility")),
                     **charges,
-                    tool=tool_module("feature-prediction"),
+                    tool=tool_module(FeaturePredictionCliModule),
                 )
                 iim_tolerance_lo, iim_tolerance_hi = cfg.recalibration.iim[
                     "tolerance_percentiles"
@@ -1970,16 +2094,16 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     tolerance_hi=iim_tolerance_hi,
                     tolerance_method=iim_tolerance_method,
                     fdr=cfg.sage_summarize.fdr,
-                    tool=tool_module("feature-prediction"),
+                    tool=tool_module(FeaturePredictionCliModule),
                 )
                 corrections["inv_ion_mobility"] = P.corrected_inv_ion_mobility
                 predictions["predicted_iim"] = speclib_iim
 
             P.recalibrated_precursors = update_precursors(
-                P.search_precursors, **corrections, tool=tool_module("update-precursors")
+                P.search_precursors, **corrections, tool=tool_module(UpdatePrecursorsModule)
             )
             P.recalibrated_sage_config = update_sage_config(
-                P.sage_config, **tolerances, tool=tool_module("config_set")
+                P.sage_config, **tolerances, tool=tool_module(ConfigSetModule)
             )
             current_precursors = P.recalibrated_precursors
             current_sage_config = P.recalibrated_sage_config
@@ -2000,7 +2124,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             compact_peptides=P.compact_peptides,
             speclib_fragments=speclib_fragments,
             **predictions,
-            fdr_levels_tool=tool_module("fdr-levels"),
+            fdr_levels_tool=tool_module(FdrLevelsModule),
         )
 
         if "mz" in cfg.get("recalibration", {}):
@@ -2012,24 +2136,24 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 P.precursor_mz_search_tolerance,
                 P.fragment_mz_search_tolerance,
                 fdr=cfg.sage_summarize.fdr,
-                tool=tool_module("plot-recalibrated-ppm"),
+                tool=tool_module(PlotRecalibratedPpmModule),
             )
 
         P.confident_psms = filter_sage_results(
             P.sage_results_tsv, fdr=cfg.sage_summarize.fdr,
-            tool=tool_module("sage-filter"),
+            tool=tool_module(SageFilterModule),
         )
         P.score_comparison = score_comparison(
             P.search_pmsms,
             P.confident_psms,
             P.sage_matched_fragments,
             P.pseudomsms_config,
-            tool=tool_module("sage_score_mapper"),
+            tool=tool_module(SageScoreMapperModule),
         )
 
         if "mokapot" in cfg:
             plugin = cfg.mokapot.get("plugin", "")
-            mokapot_plugin_module = tool_module(f"mokapot-{plugin}") if plugin else None
+            mokapot_plugin_module = tool_module(MOKAPOT_PLUGIN_MODULES[plugin]) if plugin else None
             (
                 P.mokapot_used_pin,
                 P.mokapot_peptides,
@@ -2041,15 +2165,15 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 rt_source="external" if "predicted_rt" in predictions else "none",
                 iim_source="external" if "predicted_iim" in predictions else "none",
                 **cfg.mokapot,
-                pin_adapter=tool_module("mokapot_pin_adapter"),
-                fdr_levels_tool=tool_module("fdr-levels"),
+                pin_adapter=tool_module(MokapotPinAdapterModule),
+                fdr_levels_tool=tool_module(FdrLevelsModule),
                 plugin_module=mokapot_plugin_module,
             )
 
         # FDR Summary
         P.sage_summary = sage_summarize(
             P.sage_results_tsv, P.sage_summarize_module, fdr=cfg.sage_summarize.fdr,
-            tool=tool_module("sage-summarize-raw"),
+            tool=tool_module(SageSummarizeRawModule),
         )
 
     # Exports -- current_tof2mz_table/current_precursors are the recalibrated
@@ -2072,5 +2196,5 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             current_tof2mz_table,
             current_precursors,
             config_path=mgf_config_path,
-            tool=tool_module("msms2mgf"),
+            tool=tool_module(MgfWritersModule),
         )

@@ -17,6 +17,7 @@ from ionmaidentools.pipelines import (
     Mgf,
     MmappetDataset,
     Pmsms,
+    MgfWritersModule,
     Pmsms2mzmlBinary,
     PythonModule,
     TofFilteredMzml,
@@ -89,6 +90,11 @@ class SyntheticMgf(Mgf):
     pass
 
 
+class SimulatePeptidesScript(PythonModule):
+    filename = "simulate_peptides_to_pmsms.py"
+    source = "scripts/simulate_peptides_to_pmsms.py"
+
+
 @command
 def generate_fragpipe_decoy_fasta(fasta: Fasta):
     """The FASTA plus Philosopher's reversed decoys (`rev_` prefix)."""
@@ -126,7 +132,7 @@ def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDec
 @command
 def simulate_peptides_to_pmsms(
     fasta: Fasta,
-    tool: PythonModule,
+    tool: SimulatePeptidesScript,
     charges: str,
     max_peptides_per_protein: int,
     seed: int,
@@ -163,7 +169,7 @@ def convert_synthetic_pmsms_to_mzml(
 def convert_synthetic_pmsms_to_mgf(
     pmsms: SyntheticPmsms,
     precursors: SyntheticPrecursors,
-    tool: PythonModule,
+    tool: MgfWritersModule,
     config_path: str,
 ):
     """The synthetic pmsms as MGF."""
@@ -282,7 +288,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
             "max_peptides_per_protein", 12
         ),
         seed=cfg.get("simulation", {}).get("seed", 20260715),
-        tool=tool_module("simulate_peptides_to_pmsms"),
+        tool=tool_module(SimulatePeptidesScript),
     )
 
     # Spectrum File Creation
@@ -305,7 +311,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
             P.synthetic_pmsms,
             P.synthetic_precursors,
             config_path=mgf_config_path,
-            tool=tool_module("msms2mgf"),
+            tool=tool_module(MgfWritersModule),
         )
     else:
         raise ValueError(
