@@ -26,6 +26,11 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   Parameters annotated with a `Node` subclass are DAG-edge inputs (parent nodes);
   plain-typed parameters (`str`, `int`, `float`) are scalar config/CLI-flag inputs, not
   DAG edges; `threads: Resource[int] = CORES` reserves cores, outside node identity.
+- The programs a rule runs are inputs too, so changing one reruns the steps using it:
+  binaries (`symlink(Tdf2msBinary, ...)`, called as `{tdf2ms}`) and, for Python tools, the
+  module the launcher imports (`tool: PythonModule`, from `tool_module(name)` and
+  `TOOL_MODULES`). Edits deeper in a Python package are not tracked; force those with
+  `nf run --invalidate <label>`. System tools (pigz, tar, FragPipe) are not tracked.
 - Workflows (`ionmaiden_pipeline(P, config)`, `fragpipe_synthetic_pipeline(P, config)`)
   are decorated `@workflow`, so `P` is the active Pipeline while one runs and rules are
   called without it: `P.some_label = some_rule(parent_node, ..., scalar_kwarg=...)`.
@@ -58,7 +63,7 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 - `fragpipe_pipeline.py:fragpipe_synthetic_pipeline`: FragPipe smoke test on
   Koina-simulated peptides from a FASTA (no Bruker `.d` input, no Sage).
 
-Both FragPipe workflows run the same search, `fragpipe_search` (`source_fragpipe_workflow`/
+Both FragPipe workflows run the same search, `fragpipe_search` (`symlink(FragpipeWorkflow, ...)`/
 `generate_fragpipe_decoy_fasta`/`patch_fragpipe_workflow`/`write_fragpipe_manifest`/
 `run_fragpipe`/`extract_fragpipe_log`/`summarize_fragpipe`, labelled `fragpipe_*`).
 
@@ -93,7 +98,7 @@ top-level monorepo's `summarise/fingerprints.json`).
   file to overview + index, not accumulating topics again.
 - FragPipe's `.workflow` file is a hand-maintained flat `key=value` properties file
   (`configs/search/fragpipe/workflows/*.workflow`), symlinked in as-is by
-  `source_fragpipe_workflow`. `patch_fragpipe_workflow` derives a copy with
+  `symlink(FragpipeWorkflow, ...)`. `patch_fragpipe_workflow` derives a copy with
   `database.db-path=` rewritten (via `sed`) to point at `generate_fragpipe_decoy_fasta`'s
   output, so `run_fragpipe` always searches against a decoy-augmented FASTA — this is
   the one exception to "never patched", added because FragPipe/Philosopher has no

@@ -9,7 +9,7 @@ from __future__ import annotations
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import Node, Pipeline, Resource, command, outputs, shell, workflow
+from necroflow import Node, Pipeline, Resource, command, outputs, shell, symlink, workflow
 
 from ionmaidentools.pipelines import (
     CORES,
@@ -17,10 +17,12 @@ from ionmaidentools.pipelines import (
     Mgf,
     MmappetDataset,
     Pmsms,
+    Pmsms2mzmlBinary,
+    PythonModule,
     TofFilteredMzml,
     TofFilteredMzmlIdmap,
     build_ionmaiden_pipeline,
-    source_fasta,
+    tool_module,
     write_pipeline_config,
 )
 
@@ -88,19 +90,13 @@ class SyntheticMgf(Mgf):
 
 
 @command
-def source_fragpipe_workflow(path: str):
-    workflow = outputs(FragpipeWorkflow)
-    shell("ln -s $(realpath {path}) {workflow}")
-    return workflow
-
-
-@command
 def generate_fragpipe_decoy_fasta(fasta: Fasta):
+    """The FASTA plus Philosopher's reversed decoys (`rev_` prefix)."""
     decoy_fasta = outputs(FragpipeDecoyFasta)
     # `cd` changes the meaning of every relative path substituted into this
     # template, including the philosopher binary's own repo-relative path and
     # {decoy_fasta} itself -- so all of them are frozen to absolute via shell
-    # variables *before* the cd, same reasoning as source_fasta's realpath.
+    # variables *before* the cd, same reasoning as `symlink`'s realpath.
     shell(
         "REPO_ROOT=$(pwd) && FASTA_ABS=$(realpath {fasta})"
         " && DECOY_ABS=$(realpath -m {decoy_fasta})"
@@ -118,6 +114,7 @@ def generate_fragpipe_decoy_fasta(fasta: Fasta):
 
 @command
 def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDecoyFasta):
+    """The FragPipe workflow with `database.db-path` pointing at the decoy FASTA."""
     patched_workflow = outputs(FragpipeWorkflow)
     shell(
         "sed -e 's|^database\\.db-path=.*|database.db-path={decoy_fasta}|'"
@@ -129,10 +126,12 @@ def patch_fragpipe_workflow(workflow: FragpipeWorkflow, decoy_fasta: FragpipeDec
 @command
 def simulate_peptides_to_pmsms(
     fasta: Fasta,
+    tool: PythonModule,
     charges: str,
     max_peptides_per_protein: int,
     seed: int,
 ):
+    """Synthetic pmsms and precursors simulated from peptides of the FASTA."""
     pmsms, precursors = outputs(SyntheticPmsms, SyntheticPrecursors)
     shell(
         "venvs/common/bin/python scripts/simulate_peptides_to_pmsms.py"
@@ -147,9 +146,10 @@ def simulate_peptides_to_pmsms(
 
 @command
 def convert_synthetic_pmsms_to_mzml(
-    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors,
+    pmsms: SyntheticPmsms, precursors: SyntheticPrecursors, pmsms2mzml: Pmsms2mzmlBinary,
     threads: Resource[int] = CORES,
 ):
+    """The synthetic pmsms as mzML, with a spectrum id map."""
     mzml, idmap = outputs(SyntheticMzml, SyntheticMzmlIdmap)
     shell(
         "git/pmsms2mzml/pmsms2mzml {pmsms} {precursors} {workdir}"
@@ -163,8 +163,10 @@ def convert_synthetic_pmsms_to_mzml(
 def convert_synthetic_pmsms_to_mgf(
     pmsms: SyntheticPmsms,
     precursors: SyntheticPrecursors,
+    tool: PythonModule,
     config_path: str,
 ):
+    """The synthetic pmsms as MGF."""
     mgf = outputs(SyntheticMgf)
     shell(
         "venvs/common/bin/msms2mgf {pmsms} {precursors} {config_path} {mgf}"
@@ -175,6 +177,7 @@ def convert_synthetic_pmsms_to_mgf(
 
 @command
 def write_fragpipe_manifest(mzml: TofFilteredMzml):
+    """FragPipe's manifest: the one mzML as DDA experiment `A`, replicate 1."""
     manifest = outputs(FragpipeManifest)
     shell('printf "%s\\tA\\t1\\tDDA" "$(realpath {mzml})" > {manifest}')
     return manifest
@@ -187,6 +190,7 @@ def run_fragpipe(
     ram: int = 0,
     threads: Resource[int] = CORES,
 ):
+    """Headless FragPipe running `workflow` on the manifest's mzML."""
     dir = outputs(FragpipeResultsDir)
     shell(
         "software/fragpipe/fragpipe-24.0/bin/fragpipe --headless"
@@ -200,6 +204,7 @@ def run_fragpipe(
 
 @command
 def extract_fragpipe_log(dir: FragpipeResultsDir):
+    """FragPipe's run log."""
     log = outputs(FragpipeLog)
     shell("cp $(ls {dir}/log_*.txt | head -n 1) {log}")
     return log
@@ -207,6 +212,8 @@ def extract_fragpipe_log(dir: FragpipeResultsDir):
 
 @command
 def summarize_fragpipe(log: FragpipeLog):
+    """The log's temp-directory line, mass calibration and final counts after FDR
+    filtering."""
     summary = outputs(FragpipeSummary)
     shell(
         "grep -m 1 temp {log} > {summary}"
@@ -219,7 +226,7 @@ def fragpipe_search(P: Pipeline, fasta, mzml, fragpipe_cfg: DotDict) -> None:
     """FragPipe on the `mzml` Node against `fasta` plus Philosopher's decoys, labelled
     `fragpipe_*` on `P`, inside an active workflow. `fragpipe_cfg` is the job's
     `[fragpipe]`: `workflow_path`, optional `ram` (FragPipe's `--ram`, default 0)."""
-    P.fragpipe_workflow = source_fragpipe_workflow(path=fragpipe_cfg.workflow_path)
+    P.fragpipe_workflow = symlink(FragpipeWorkflow, fragpipe_cfg.workflow_path)
     P.fragpipe_decoy_fasta = generate_fragpipe_decoy_fasta(fasta)
     P.fragpipe_workflow_patched = patch_fragpipe_workflow(
         P.fragpipe_workflow, P.fragpipe_decoy_fasta
@@ -267,7 +274,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     P.pipeline_config = write_pipeline_config(text=tomlkit.dumps(config))
 
     # Peptide Simulation
-    P.fasta = source_fasta(path=cfg.fasta_path)
+    P.fasta = symlink(Fasta, cfg.fasta_path)
     P.synthetic_pmsms, P.synthetic_precursors = simulate_peptides_to_pmsms(
         P.fasta,
         charges=cfg.get("simulation", {}).get("charges", "2,3"),
@@ -275,6 +282,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
             "max_peptides_per_protein", 12
         ),
         seed=cfg.get("simulation", {}).get("seed", 20260715),
+        tool=tool_module("simulate_peptides_to_pmsms"),
     )
 
     # Spectrum File Creation
@@ -283,6 +291,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
         P.synthetic_mzml, P.synthetic_mzml_idmap = convert_synthetic_pmsms_to_mzml(
             P.synthetic_pmsms,
             P.synthetic_precursors,
+            pmsms2mzml=symlink(Pmsms2mzmlBinary, "git/pmsms2mzml/pmsms2mzml"),
         )
 
         fragpipe_search(P, P.fasta, P.synthetic_mzml, cfg.fragpipe)
@@ -296,6 +305,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
             P.synthetic_pmsms,
             P.synthetic_precursors,
             config_path=mgf_config_path,
+            tool=tool_module("msms2mgf"),
         )
     else:
         raise ValueError(

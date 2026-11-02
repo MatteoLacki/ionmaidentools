@@ -19,7 +19,7 @@ writes (`mokapot.decoy.psms.txt`, undeclared, in the node directory).
 `_fdr_levels_record_flags` passes the run database what it cannot find itself: the
 node directory, the tool command (SAGE's call, or the pin adapter + mokapot call), and
 every input path (`--parent`). The recorder walks those inputs' `.rip/dependencies.toml`
-up to `source_bruker_d` for the configs and the dataset; the node's own metadata is
+up to `symlink_BrukerD` for the configs and the dataset; the node's own metadata is
 written only after its command finishes.
 
 Why inside the tool commands rather than a separate rule: the counts and the record then
