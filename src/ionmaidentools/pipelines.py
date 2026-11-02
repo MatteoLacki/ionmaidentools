@@ -1452,6 +1452,7 @@ def mokapot(
     train_fdr: float = 0.05,
     test_fdr: float = 0.01,
     folds: int = 3,
+    train_top_rank: bool = False,
     plugin: str = "",
     rt_source: str | None = None,
     iim_source: str | None = None,
@@ -1516,6 +1517,7 @@ def mokapot(
 
     workdir = psms.path.parent
     plugin_flag = f" --plugin {plugin}" if plugin else ""
+    train_flag = " --train_top_rank" if train_top_rank else ""
 
     # The threads this call requests, not the machine's core
     # count: mokapot fans out to `max_workers` fold processes, each running
@@ -1549,7 +1551,7 @@ def mokapot(
         f" && venvs/mokapot/bin/mokapot {_quoted(used_pin.path)} --dest_dir {_quoted(workdir)}"
         f" --train_fdr {train_fdr} --test_fdr {test_fdr}"
         f" --folds {folds} --max_workers {max_workers} --seed {seed} --keep_decoys"
-        f"{plugin_flag}{plugin_flags}"
+        f"{train_flag}{plugin_flag}{plugin_flags}"
     )
     shell(
         f"{mokapot} && test -f {{peptides}} && test -f {{psms}}"
@@ -1912,6 +1914,11 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             else:
                 recalibration_spectra = P.search_pmsms
                 recalibration_search_precursors = P.recalibration_precursors
+            # The fits read rank 1 only, and extra ranks would change the SAGE
+            # q-values they select on.
+            P.recalibration_sage_config = text_file(
+                SageConfig, _json_text({**cfg.sage, "report_psms": 1})
+            )
             (
                 P.filtered_sage_results_json,
                 P.filtered_sage_results_pin,
@@ -1922,7 +1929,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                 recalibration_spectra,
                 recalibration_search_precursors,
                 P.fasta,
-                P.sage_config,
+                P.recalibration_sage_config,
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
                 compact_peptides=P.compact_peptides,
