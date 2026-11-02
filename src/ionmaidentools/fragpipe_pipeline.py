@@ -9,7 +9,7 @@ from __future__ import annotations
 import tomlkit
 
 from dictodot import DotDict
-from necroflow import Node, Pipeline, Resource, command, outputs, shell, symlink, workflow
+from necroflow import Node, Pipeline, Resource, command, outputs, shell, symlink, text_file, workflow
 
 from ionmaidentools.pipelines import (
     CORES,
@@ -19,12 +19,12 @@ from ionmaidentools.pipelines import (
     Pmsms,
     MgfWritersModule,
     Pmsms2mzmlBinary,
+    PipelineConfig,
     PythonModule,
     TofFilteredMzml,
     TofFilteredMzmlIdmap,
     build_ionmaiden_pipeline,
     tool_module,
-    write_pipeline_config,
 )
 
 
@@ -277,7 +277,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     produced valid output from the same simulate_peptides_to_pmsms run.
     """
     cfg: DotDict = DotDict.Recursive(config)
-    P.pipeline_config = write_pipeline_config(text=tomlkit.dumps(config))
+    P.pipeline_config = text_file(PipelineConfig, tomlkit.dumps(config))
 
     # Peptide Simulation
     P.fasta = symlink(Fasta, cfg.fasta_path)

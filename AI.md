@@ -39,8 +39,10 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   Helpers defined inside a workflow (e.g. `_finalize_confident_psms`) use the same
   active Pipeline. Necroflow still accepts an explicit leading `P`; this module no
   longer passes it.
-- Both workflows serialize their complete Necroflow-supplied config through
-  `write_pipeline_config` and publish it as requestable `P.pipeline_config`
+- Config files are `text_file(Type, text)` calls in the workflow (the `Type` docstring says
+  which job section it holds and which step reads it). Both workflows serialize their
+  complete Necroflow-supplied config as `text_file(PipelineConfig, ...)`, requestable as
+  `P.pipeline_config`
   (`pipeline_config.toml`). Necroflow strips metadata keys such as `.pipeline` and
   `.requests`, resolves `.extends`, and expands grids before calling the workflow, so
   the file records the effective workflow input.

@@ -268,6 +268,8 @@ MOKAPOT_PLUGIN_MODULES = {"xgboost": MokapotXgboostModule, "lightgbm": MokapotLi
 
 # --- compute artifact node types ---
 class PipelineConfig(Toml):
+    """The job's complete effective config, as TOML."""
+
     filename = "pipeline_config.toml"
 
 
@@ -288,6 +290,8 @@ class Ms2TsfEvents(MmappetDataset):
 
 
 class ScaleEstimationConfig(Toml):
+    """`[scale_estimation]`, read by the three MS1 scale-estimation steps."""
+
     filename = "scale_estimation_config.toml"
 
 
@@ -308,10 +312,14 @@ class ScaleEstimates(Node):
 
 
 class PrecursorNeighborCountConfig(Toml):
+    """`[precursor_neighbor_count]`, read by `count_candidate_neighbors`."""
+
     filename = "precursor_neighbor_count_config.toml"
 
 
 class PrecursorCandidateSelectionConfig(Toml):
+    """`[precursor_candidate_selection]`, read by `score_candidates`."""
+
     filename = "precursor_candidate_selection_config.toml"
 
 
@@ -324,10 +332,14 @@ class RawPrecursorClusters(MmappetDataset):
 
 
 class PrecursorAnnotationConfig(Toml):
+    """`[precursor_annotation]`, read by `annotate_precursor_clusters`."""
+
     filename = "precursor_annotation_config.toml"
 
 
 class PostprocessingConfig(Toml):
+    """`[postprocessing_of_precursors]`, read by `decharge_precursor_clusters`."""
+
     filename = "postprocessing_config.toml"
 
 
@@ -340,6 +352,8 @@ class PostprocessedPrecursorClusters(MmappetDataset):
 
 
 class PrecursorTransmissionConfig(Toml):
+    """`[precursor_transmission]`, read by `transmit_precursors_into_fragment_space`."""
+
     filename = "precursor_transmission_config.toml"
 
 
@@ -356,6 +370,8 @@ class FirstFilterPrecursors(MmappetDataset):
 
 
 class PseudomsmsConfig(Toml):
+    """`[pseudomsms]`: mkpmsms' settings."""
+
     filename = "pseudomsms_config.toml"
 
 
@@ -372,6 +388,9 @@ class PreSageFilteredPrecursors(MmappetDataset):
 
 
 class PrecursorNeighborsConfig(Toml):
+    """`[score_competition]` without `score_margin`: the precursor-neighbour search
+    settings."""
+
     filename = "precursor_neighbors_config.toml"
 
 
@@ -396,6 +415,8 @@ class TofFilteredPrecursors(PreSageFilteredPrecursors):
 
 
 class SageConfig(Json):
+    """`[sage]` as SAGE's JSON config."""
+
     filename = "sage_config.json"
 
 
@@ -501,6 +522,8 @@ class SageSummary(Tsv):
 
 
 class RecalibrationPrecursorSelectionConfig(Toml):
+    """`[recalibration_precursor_selection]`, read by `select_recalibration_precursors`."""
+
     filename = "recalibration_precursor_selection_config.toml"
 
 
@@ -536,6 +559,8 @@ class RecalibratedTof2MzTable(Tof2MzTable):
 
 
 class RecalibrationConfig(Toml):
+    """`[recalibration.mz]`, read by the m/z fits."""
+
     filename = "recalibration_config.toml"
 
 
@@ -673,13 +698,6 @@ def tool_module(module: type[PythonModule]) -> PythonModule:
 
 
 # --- compute rules ---
-@text_file
-def write_pipeline_config(text: str):
-    """The job's complete effective config, as TOML."""
-    config = outputs(PipelineConfig)
-    return config
-
-
 @command
 def tdf2ms1(tdf: BrukerD, tdf2ms: Tdf2msBinary, threads: Resource[int] = CORES):
     """The `.d`'s MS1 events sorted by (tof, urt, scan), with the split TOF/URT index."""
@@ -743,13 +761,6 @@ def tdf2ms2_tsf(tdf: BrukerD, tdf2ms: Tdf2msBinary, threads: Resource[int] = COR
     return ms2_tsf
 
 
-@text_file
-def write_scale_estimation_config(text: str):
-    """`[scale_estimation]`, read by the three MS1 scale-estimation steps."""
-    config = outputs(ScaleEstimationConfig)
-    return config
-
-
 @command
 def find_ms1_argmaxes(
     ms1: Ms1Events,
@@ -799,20 +810,6 @@ def fit_ms1_scale_estimates(
     return scales
 
 
-@text_file
-def write_precursor_neighbor_count_config(text: str):
-    """`[precursor_neighbor_count]`, read by `count_candidate_neighbors`."""
-    config = outputs(PrecursorNeighborCountConfig)
-    return config
-
-
-@text_file
-def write_precursor_candidate_selection_config(text: str):
-    """`[precursor_candidate_selection]`, read by `score_candidates`."""
-    config = outputs(PrecursorCandidateSelectionConfig)
-    return config
-
-
 @command
 def count_candidate_neighbors(
     ms1: Ms1Events,
@@ -846,20 +843,6 @@ def score_candidates(
         "venvs/common/bin/ms1_score_candidates {ms1} {scale_estimates} {features} {config} {clusters}"
     )
     return clusters
-
-
-@text_file
-def write_precursor_annotation_config(text: str):
-    """`[precursor_annotation]`, read by `annotate_precursor_clusters`."""
-    config = outputs(PrecursorAnnotationConfig)
-    return config
-
-
-@text_file
-def write_postprocessing_config(text: str):
-    """`[postprocessing_of_precursors]`, read by `decharge_precursor_clusters`."""
-    config = outputs(PostprocessingConfig)
-    return config
 
 
 @command
@@ -899,13 +882,6 @@ def decharge_precursor_clusters(
     return clusters
 
 
-@text_file
-def write_precursor_transmission_config(text: str):
-    """`[precursor_transmission]`, read by `transmit_precursors_into_fragment_space`."""
-    config = outputs(PrecursorTransmissionConfig)
-    return config
-
-
 @command
 def transmit_precursors_into_fragment_space(
     tdf: BrukerD,
@@ -938,13 +914,6 @@ def filter_first_precursors(
         "venvs/common/bin/filter_mmappet {precursors} {filtered} --verbose --filter {filter}"
     )
     return filtered
-
-
-@text_file
-def write_pseudomsms_config(text: str):
-    """`[pseudomsms]`: mkpmsms' settings."""
-    config = outputs(PseudomsmsConfig)
-    return config
 
 
 @command
@@ -1034,14 +1003,6 @@ def top_cell_precursors(
     return top_cell
 
 
-@text_file
-def write_precursor_neighbors_config(text: str):
-    """`[score_competition]` without `score_margin`: the precursor-neighbour search
-    settings."""
-    config = outputs(PrecursorNeighborsConfig)
-    return config
-
-
 @command
 def build_precursor_grid_index(
     precursors: PreSageFilteredPrecursors,
@@ -1117,13 +1078,6 @@ def materialize_tof_filtered_pmsms(
     return pmsms_out, precursors_out
 
 
-@text_file
-def write_recalibration_precursor_selection_config(text: str):
-    """`[recalibration_precursor_selection]`, read by `select_recalibration_precursors`."""
-    config = outputs(RecalibrationPrecursorSelectionConfig)
-    return config
-
-
 @command
 def select_recalibration_precursors(
     precursors: PreSageFilteredPrecursors,
@@ -1139,13 +1093,6 @@ def select_recalibration_precursors(
         " {precursors} {config} {selected}"
     )
     return selected
-
-
-@text_file
-def write_recalibration_config(text: str):
-    """`[recalibration.mz]`, read by the m/z fits."""
-    config = outputs(RecalibrationConfig)
-    return config
 
 
 @command
@@ -1213,20 +1160,6 @@ def plot_recalibrated_ppm(
         " {plot} --fdr {fdr}"
     )
     return plot
-
-
-@text_file
-def write_sage_config(text: str):
-    """`[sage]` as SAGE's JSON config."""
-    config = outputs(SageConfig)
-    return config
-
-
-@text_file
-def write_dump_peptides_config(text: str):
-    """SAGE's database settings, as JSON for `dump_peptides`."""
-    dump_peptides_config = outputs(DumpPeptidesConfig)
-    return dump_peptides_config
 
 
 @command
@@ -1743,7 +1676,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     """The main IonMaiden pipeline's rules, called inside an active workflow
     (`ionmaiden_pipeline`, `fragpipe_pipeline.ionmaiden_fragpipe_pipeline`)."""
     cfg = DotDict.Recursive(config)
-    P.pipeline_config = write_pipeline_config(text=tomlkit.dumps(config))
+    P.pipeline_config = text_file(PipelineConfig, tomlkit.dumps(config))
 
     # Acquisition
     P.tdf = symlink(BrukerD, cfg.tdf_path)
@@ -1766,8 +1699,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     P.ms2_tsf_events = tdf2ms2_tsf(P.tdf, tdf2ms=tdf2ms)
 
     # MS1 Scale Calibration
-    P.scale_estimation_config = write_scale_estimation_config(
-        text=tomlkit.dumps(cfg.scale_estimation)
+    P.scale_estimation_config = text_file(
+        ScaleEstimationConfig, tomlkit.dumps(cfg.scale_estimation)
     )
     P.argmaxes, P.argmax_sieve_stats = find_ms1_argmaxes(
         P.ms1_events, P.scale_estimation_config,
@@ -1786,11 +1719,11 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     )
 
     # Precursor Selection
-    P.precursor_neighbor_count_config = write_precursor_neighbor_count_config(
-        text=tomlkit.dumps(cfg.precursor_neighbor_count)
+    P.precursor_neighbor_count_config = text_file(
+        PrecursorNeighborCountConfig, tomlkit.dumps(cfg.precursor_neighbor_count)
     )
-    P.precursor_candidate_selection_config = write_precursor_candidate_selection_config(
-        text=tomlkit.dumps(cfg.precursor_candidate_selection)
+    P.precursor_candidate_selection_config = text_file(
+        PrecursorCandidateSelectionConfig, tomlkit.dumps(cfg.precursor_candidate_selection)
     )
     P.raw_candidate_features = count_candidate_neighbors(
         P.ms1_events,
@@ -1807,11 +1740,11 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     )
 
     # Precursor Postprocessing
-    P.precursor_annotation_config = write_precursor_annotation_config(
-        text=tomlkit.dumps(cfg.precursor_annotation)
+    P.precursor_annotation_config = text_file(
+        PrecursorAnnotationConfig, tomlkit.dumps(cfg.precursor_annotation)
     )
-    P.postprocessing_config = write_postprocessing_config(
-        text=tomlkit.dumps(cfg.postprocessing_of_precursors)
+    P.postprocessing_config = text_file(
+        PostprocessingConfig, tomlkit.dumps(cfg.postprocessing_of_precursors)
     )
     P.annotated_precursor_clusters = annotate_precursor_clusters(
         P.tdf,
@@ -1830,8 +1763,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     )
 
     # Precursor Transmission
-    P.precursor_transmission_config = write_precursor_transmission_config(
-        text=tomlkit.dumps(cfg.precursor_transmission)
+    P.precursor_transmission_config = text_file(
+        PrecursorTransmissionConfig, tomlkit.dumps(cfg.precursor_transmission)
     )
     P.transmitted_ms1events, P.transmitted_precursor_clusters = (
         transmit_precursors_into_fragment_space(
@@ -1849,7 +1782,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     )
 
     # Pseudo-MS/MS Assembly
-    P.pseudomsms_config = write_pseudomsms_config(text=tomlkit.dumps(cfg.pseudomsms))
+    P.pseudomsms_config = text_file(PseudomsmsConfig, tomlkit.dumps(cfg.pseudomsms))
     P.pmsms = run_mkpmsms_binary(
         P.mkpmsms_binary,
         P.ms2_events,
@@ -1875,8 +1808,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         neighbors = {
             k: v for k, v in cfg.score_competition.items() if k != "score_margin"
         }
-        P.precursor_neighbors_config = write_precursor_neighbors_config(
-            text=tomlkit.dumps(neighbors)
+        P.precursor_neighbors_config = text_file(
+            PrecursorNeighborsConfig, tomlkit.dumps(neighbors)
         )
         P.precursor_grid_index = build_precursor_grid_index(
             P.pre_sage_filtered_precursors,
@@ -1916,7 +1849,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
     # Search
 
     if "sage" in cfg:
-        P.sage_config = write_sage_config(text=_json_text(cfg.sage))
+        P.sage_config = text_file(SageConfig, _json_text(cfg.sage))
         current_sage_config = P.sage_config
 
         database = cfg.sage.database
@@ -1930,8 +1863,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             "static_mods": database["static_mods"],
             "variable_mods": database["variable_mods"],
         }
-        P.dump_peptides_config = write_dump_peptides_config(
-            text=_json_text(dump_peptides_database)
+        P.dump_peptides_config = text_file(
+            DumpPeptidesConfig, _json_text(dump_peptides_database)
         )
         P.compact_peptides = dump_compact_peptides(
             P.fasta, P.dump_peptides_config, P.dump_peptides_binary
@@ -1957,10 +1890,9 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
         predictions = {}  # run_sage's predicted_rt / predicted_iim
         if "recalibration" in cfg:
-            P.recalibration_precursor_selection_config = (
-                write_recalibration_precursor_selection_config(
-                    text=tomlkit.dumps(cfg.recalibration_precursor_selection)
-                )
+            P.recalibration_precursor_selection_config = text_file(
+                RecalibrationPrecursorSelectionConfig,
+                tomlkit.dumps(cfg.recalibration_precursor_selection),
             )
             P.recalibration_precursors = select_recalibration_precursors(
                 P.search_precursors,
@@ -1999,8 +1931,8 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             corrections = {}  # update_precursors' columns
             tolerances = {}  # update_sage_config's tolerances
             if "mz" in cfg.recalibration:
-                P.recalibration_config = write_recalibration_config(
-                    text=tomlkit.dumps(cfg.recalibration.mz)
+                P.recalibration_config = text_file(
+                    RecalibrationConfig, tomlkit.dumps(cfg.recalibration.mz)
                 )
                 (
                     P.fragment_shift_ppm,
