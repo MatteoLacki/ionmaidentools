@@ -640,7 +640,7 @@ class SpeclibPart(Node):
 
 
 class SpeclibFragments(SpeclibPart):
-    """A SPECLIB fragments part: `index.mmappet` + `arrays.mmappet`."""
+    """A SPECLIB fragments part: `index.mmappet`, `arrays.mmappet`, `annotations.mmappet`."""
 
     filename = "speclib_fragments"
 
