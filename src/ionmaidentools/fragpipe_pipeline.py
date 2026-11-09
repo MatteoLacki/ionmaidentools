@@ -24,6 +24,7 @@ from ionmaidentools.pipelines import (
     TofFilteredMzml,
     TofFilteredMzmlIdmap,
     build_ionmaiden_pipeline,
+    single_fasta_path,
     tool_module,
 )
 
@@ -250,7 +251,9 @@ def fragpipe_search(P: Pipeline, fasta, mzml, fragpipe_cfg: DotDict) -> None:
 @workflow
 def ionmaiden_fragpipe_pipeline(P: Pipeline, config: dict) -> None:
     """The main IonMaiden pipeline, then FragPipe on its search mzML (`[fragpipe]`
-    required) -- a side-by-side comparison with SAGE on the same spectra."""
+    required) -- a side-by-side comparison with SAGE on the same spectra. FragPipe takes one
+    FASTA, so a job listing several is refused here."""
+    single_fasta_path(DotDict.Recursive(config), "ionmaiden_fragpipe_pipeline")
     build_ionmaiden_pipeline(P, config)
     fragpipe_search(P, P.fasta, P.search_mzml, DotDict.Recursive(config).fragpipe)
 
@@ -280,7 +283,7 @@ def fragpipe_synthetic_pipeline(P: Pipeline, config: dict) -> None:
     P.pipeline_config = text_file(PipelineConfig, tomlkit.dumps(config))
 
     # Peptide Simulation
-    P.fasta = symlink(Fasta, cfg.fasta_path)
+    P.fasta = symlink(Fasta, single_fasta_path(cfg, "fragpipe_synthetic_pipeline"))
     P.synthetic_pmsms, P.synthetic_precursors = simulate_peptides_to_pmsms(
         P.fasta,
         charges=cfg.get("simulation", {}).get("charges", "2,3"),

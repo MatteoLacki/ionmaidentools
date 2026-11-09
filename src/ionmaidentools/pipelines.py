@@ -14,11 +14,13 @@ import json
 import os
 import shlex
 from pathlib import Path
+from typing import Annotated
 
 import tomlkit
 
 from dictodot import DotDict
 from necroflow import (
+    Many,
     Node,
     Pipeline,
     Resource,
@@ -67,6 +69,35 @@ class BrukerD(Node):
 
 class Fasta(Node):
     filename = "fasta.fasta"
+
+
+def fasta_paths(cfg) -> list[str]:
+    """A job's FASTA files in the order they are read as one proteome: `fasta_paths` (a list)
+    or `fasta_path` (one), never both. See plans/fastas_more_the_merrier.md."""
+    if "fasta_path" in cfg and "fasta_paths" in cfg:
+        raise ValueError("a job names fasta_path or fasta_paths, not both")
+    if "fasta_paths" in cfg:
+        paths = list(cfg.fasta_paths)
+        if not paths:
+            raise ValueError("fasta_paths is empty")
+    elif "fasta_path" in cfg:
+        paths = [cfg.fasta_path]
+    else:
+        raise ValueError("a job needs fasta_path or fasta_paths")
+    for path in paths:
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"a FASTA path must be a non-empty string, not {path!r}")
+    return [str(path) for path in paths]
+
+
+def single_fasta_path(cfg, workflow_name: str) -> str:
+    """The job's one FASTA, for workflows that search a single file (FragPipe)."""
+    paths = fasta_paths(cfg)
+    if len(paths) != 1:
+        raise ValueError(
+            f"{workflow_name} searches one FASTA; this job lists {len(paths)} in fasta_paths"
+        )
+    return paths[0]
 
 
 class MkpmsmsBinary(Executable):
@@ -1164,16 +1195,18 @@ def plot_recalibrated_ppm(
 
 @command
 def dump_compact_peptides(
-    fasta: Fasta,
+    fastas: Annotated[tuple[Fasta, ...], Many(min=1)],
     dump_peptides_config: DumpPeptidesConfig,
     dump_peptides_binary: DumpPeptidesBinary,
     threads: Resource[int] = CORES,
 ):
-    """The FASTA's digest as SAGE's compact peptide table: the row space of the SPECLIBs and
-    of the sliced search."""
+    """The FASTAs' digest, read in order as one proteome, as SAGE's compact peptide table:
+    the row space of the SPECLIBs and of the sliced search."""
     compact_peptides = outputs(CompactPeptidesTable)
     shell(
-        "{dump_peptides_binary} -f {fasta} -c {dump_peptides_config} --compact {compact_peptides}"
+        "{dump_peptides_binary}"
+        + _fasta_flags(fastas)
+        + " -c {dump_peptides_config} --compact {compact_peptides}"
     )
     return compact_peptides
 
@@ -1245,6 +1278,11 @@ def _quoted(path: Path) -> str:
     return shlex.quote(str(path)).replace("{", "{{").replace("}", "}}")
 
 
+def _fasta_flags(fastas: tuple[Fasta, ...]) -> str:
+    """One `-f <path>` per FASTA, in order, as literal command template text."""
+    return "".join(f" -f {_quoted(fasta.path)}" for fasta in fastas)
+
+
 def _fdr_levels_record_flags(tool_command: str, *parents: Node | None) -> str:
     """`--node-dir`/`--command`/`--parent` flags of `sage-fdr-levels`/`mokapot-fdr-levels`:
     what the run database records about this node. `tool_command` is template text without
@@ -1258,7 +1296,7 @@ def _fdr_levels_record_flags(tool_command: str, *parents: Node | None) -> str:
 def run_sage(
     pmsms: Pmsms | Ms2Events,
     precursors: PreSageFilteredPrecursors,
-    fasta: Fasta,
+    fastas: Annotated[tuple[Fasta, ...], Many(min=1)],
     sage_config: SageConfig,
     sage_binary: SageBinary,
     tof2mz: Tof2MzTable,
@@ -1310,7 +1348,7 @@ def run_sage(
             f" --predicted-fragment-intensity-cache {_quoted(fragments / 'arrays.mmappet')}"
         )
     sage = (
-        f"{_quoted(sage_binary.path)} -f {_quoted(fasta.path)}"
+        f"{_quoted(sage_binary.path)}{_fasta_flags(fastas)}"
         f" --annotate-matches --write-pin --output_directory {_quoted(workdir)}"
         f" --pmsms {_quoted(spectra)} --precursors {_quoted(precursors.path)}{flags}"
         f" {_quoted(sage_config.path)}"
@@ -1321,7 +1359,7 @@ def run_sage(
         " && test -f {results_tsv} && test -f {matched_fragments}"
         " && venvs/common/bin/sage-fdr-levels {results_tsv} {fdr_levels}"
         + _fdr_levels_record_flags(
-            sage, pmsms, precursors, fasta, sage_config, sage_binary, tof2mz,
+            sage, pmsms, precursors, *fastas, sage_config, sage_binary, tof2mz,
             compact_peptides, predicted_rt, predicted_iim, speclib_fragments,
         )
     )
@@ -1682,7 +1720,11 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
 
     # Acquisition
     P.tdf = symlink(BrukerD, cfg.tdf_path)
-    P.fasta = symlink(Fasta, cfg.fasta_path)
+    # One source node per FASTA, read in this order; the first keeps the `fasta` label.
+    fastas = tuple(symlink(Fasta, path) for path in fasta_paths(cfg))
+    P.fasta = fastas[0]
+    for number, fasta in enumerate(fastas[1:], start=2):
+        setattr(P, f"fasta_{number}", fasta)
     P.mkpmsms_binary = symlink(MkpmsmsBinary, "git/ionmaidenmetal/build/mkpmsms")
     # Symlinked so edits to the installed-editable module invalidate sage_summarize.
     P.sage_summarize_module = symlink(
@@ -1869,7 +1911,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             DumpPeptidesConfig, _json_text(dump_peptides_database)
         )
         P.compact_peptides = dump_compact_peptides(
-            P.fasta, P.dump_peptides_config, P.dump_peptides_binary
+            fastas, P.dump_peptides_config, P.dump_peptides_binary
         )
 
         speclib = cfg.get("speclib", {})
@@ -1928,7 +1970,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
             ) = run_sage(
                 recalibration_spectra,
                 recalibration_search_precursors,
-                P.fasta,
+                fastas,
                 P.recalibration_sage_config,
                 P.sage_binary,
                 tof2mz=P.tof2mz_table,
@@ -2056,7 +2098,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         ) = run_sage(
             P.search_pmsms,
             current_precursors,
-            P.fasta,
+            fastas,
             current_sage_config,
             P.sage_binary,
             tof2mz=current_tof2mz_table,
