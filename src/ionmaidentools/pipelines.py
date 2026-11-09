@@ -73,7 +73,7 @@ class Fasta(Node):
 
 def fasta_paths(cfg) -> list[str]:
     """A job's FASTA files in the order they are read as one proteome: `fasta_paths` (a list)
-    or `fasta_path` (one), never both. See plans/fastas_more_the_merrier.md."""
+    or `fasta_path` (one), never both. See plans/done/fastas_more_the_merrier.md."""
     if "fasta_path" in cfg and "fasta_paths" in cfg:
         raise ValueError("a job names fasta_path or fasta_paths, not both")
     if "fasta_paths" in cfg:
