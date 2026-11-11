@@ -6,8 +6,19 @@ when `ION_MAIDEN_REGRESSION_DB` is set, record the run there (git/searchops
 `docs/ai/run_db.md`).
 
 Fingerprint v3 used.
-"""
 
+Class declaration formatting:
+- Keep prerequisite base classes first, all compact classes in one tabular section,
+  and the remaining documented classes in a separate section. Define bases before
+  subclasses within each section.
+- Write attribute-only and pass-only classes on one line. Group matching fields
+  together; align each field's start column across its group. Separate assignments
+  with semicolons and keep adjacent table rows contiguous.
+- Preserve class docstrings and use multiline declarations for documented classes.
+  Do not leave blank lines between a docstring and the following code in its body.
+- Protect declaration sections with `# fmt: off` / `# fmt: on` so Black preserves
+  alignment and docstring spacing.
+"""
 from __future__ import annotations
 
 import json
@@ -35,7 +46,13 @@ from necroflow import (
 CORES = os.cpu_count() or 1
 
 
+TIMSTOFU = "git/timstofu/src/timstofu"
+
+SEARCHOPS_CLI = "git/searchops/src/searchops/cli"
+
+
 # --- base node types ---
+# fmt: off
 class MmappetDataset(Node):
     """Base type for outputs that are mmappet directories (see CLAUDE.md's
     "Precursor table format" convention). No `filename` of its own -- every
@@ -62,13 +79,303 @@ class Executable(Node):
     """A program the pipeline runs."""
 
 
-# --- source node types ---
-class BrukerD(Node):
-    filename = "input.d"
+class PythonModule(Node):
+    """The module a Python tool's launcher imports, at `source`: an input of the steps
+    running the tool, so that editing it reruns them. Edits deeper in its package are not
+    tracked. One subclass per tool, so a step accepts only its own tool's module."""
+    source: str
 
 
-class Fasta(Node):
-    filename = "fasta.fasta"
+class MokapotPluginModule(PythonModule):
+    """A mokapot plugin's module, by its `--plugin` name in `MOKAPOT_PLUGIN_MODULES`."""
+
+
+class Pin(Node):
+    """A Percolator-IN TSV: SpecId, Label, ScanNr, <features...>, Peptide,
+    Proteins. Format is generic (nothing Sage-specific) -- `SageResultsPin`
+    and `SagepyRescorePin` both satisfy it, so `mokapot` accepts either."""
+
+
+class PrecursorColumn(MmappetDataset):
+    """One column row-aligned with search_precursors, set by update_precursors."""
+
+
+# --- tabular node types ---
+class BrukerD(Node):                                    filename = "input.d"
+class Fasta(Node):                                      filename = "fasta.fasta"
+class MkpmsmsBinary(Executable):                        filename = "mkpmsms"
+class SageBinary(Executable):                           filename = "sage"
+class SageSummarizeModule(Node):                        filename = "sage.py"
+class Tdf2msBinary(Executable):                         filename = "tdf2ms"
+class PrecursorNeighborsCsrBinary(Executable):          filename = "precursor_neighbors_csr"
+class TofFilterBinary(Executable):                      filename = "tof_filter"
+class Pmsms2mzmlBinary(Executable):                     filename = "pmsms2mzml"
+class Ms1Events(Node):                                  filename = "events.ms1"
+class Ms2Events(Node):                                  filename = "events.ms2"
+class Ms2TfsEvents(MmappetDataset):                     filename = "events_ms2_tfs.mmappet"
+class Ms2TsfEvents(MmappetDataset):                     filename = "events_ms2_tsf.mmappet"
+class ArgmaxSample(MmappetDataset):                     filename = "argmax_sample.mmappet"
+class ArgmaxSieveStats(Toml):                           filename = "sieve_stats.toml"
+class SampleTensors(MmappetDataset):                    filename = "sample_tensors.mmappet"
+class ScaleEstimates(Node):                             filename = "scale_estimates"
+class RawCandidateFeatures(MmappetDataset):             filename = "raw_candidate_features.mmappet"
+class RawPrecursorClusters(MmappetDataset):             filename = "raw_precursor_clusters.mmappet"
+class AnnotatedPrecursorClusters(MmappetDataset):       filename = "annotated_precursor_clusters.mmappet"
+class PostprocessedPrecursorClusters(MmappetDataset):   filename = "postprocessed_precursor_clusters.mmappet"
+class TransmittedMs1Events(MmappetDataset):             filename = "transmitted_ms1events.mmappet"
+class TransmittedPrecursorClusters(MmappetDataset):     filename = "transmitted_precursors.mmappet"
+class FirstFilterPrecursors(MmappetDataset):            filename = "first_filter_precursors.mmappet"
+class Pmsms(MmappetDataset):                            filename = "pmsms.mmappet"
+class Ms2IndexedPrecursors(MmappetDataset):             filename = "ms2indexed_precursors.mmappet"
+class PreSageFilteredPrecursors(MmappetDataset):        filename = "pre_sage_filtered_precursors.mmappet"
+class PrecursorGridIndex(Node):                         filename = "precursor_grid_index"
+class PrecursorNeighborsCsr(Node):                      filename = "precursor_neighbors_csr"
+class NeighborScore(MmappetDataset):                    filename = "neighbor_score.mmappet"
+class TofFilteredPmsms(Pmsms):                          filename = "tof_filtered_pmsms.mmappet"
+class TofFilteredPrecursors(PreSageFilteredPrecursors): filename = "tof_filtered_precursors.mmappet"
+class SageResultsJson(Json):                            filename = "results.json"
+class SageResultsPin(Pin):                              filename = "results.sage.pin"
+class SageResultsTsv(Tsv):                              filename = "results.sage.tsv"
+class SageMatchedFragments(Tsv):                        filename = "matched_fragments.sage.tsv"
+class SageFdrLevels(Tsv):                               filename = "results.sage.fdr_levels.tsv"
+class DumpPeptidesBinary(Executable):                   filename = "dump_peptides"
+class MokapotUsedPin(Pin):                              filename = "used.pin"
+class MokapotPeptides(Tsv):                             filename = "mokapot.peptides.txt"
+class MokapotPsms(Tsv):                                 filename = "mokapot.psms.txt"
+class MokapotFdrLevels(Tsv):                            filename = "mokapot.fdr_levels.tsv"
+class ConfidentPsmsParquet(Node):                       filename = "confident_psms.parquet"
+class ScoreComparisonPlots(Node):                       filename = "score_comparison"
+class Mzml(Node):                                       filename = "mzml.mzML"
+class MzmlIdmap(MmappetDataset):                        filename = "idmap.mmappet"
+class Mgf(Node):                                        filename = "spectra.mgf"
+class TofFilteredMgf(Mgf):                              filename = "tof_filtered.mgf"
+class TarGz(Node):                                      filename = "archive.tar.gz"
+class SageSummary(Tsv):                                 filename = "results.sage.summary.tsv"
+class CorrectedMz(PrecursorColumn):                     filename = "corrected_mz.mmappet"
+class CorrectedRt(PrecursorColumn):                     filename = "corrected_rt.mmappet"
+class CorrectedIim(PrecursorColumn):                    filename = "corrected_inv_ion_mobility.mmappet"
+class FragmentMzFitPlot(Png):                           filename = "fragment_mz_fit_plot.png"
+class PrecursorMzFitPlot(Png):                          filename = "precursor_mz_fit_plot.png"
+class RecalibratedPpmPlot(Png):                         filename = "recalibrated_ppm.png"
+class PrecursorCorrectionRtModel(Json):                 filename = "precursor_correction_rt_model.json"
+class PrecursorCorrectionRtFitPlot(Png):                filename = "precursor_correction_rt_fit_plot.png"
+class PrecursorCorrectionIimFitPlot(Png):               filename = "precursor_correction_iim_fit_plot.png"
+
+class FindArgmaxesModule(PythonModule):                  filename = "find_argmaxes.py";                   source = f"{TIMSTOFU}/scale_estimation/find_argmaxes.py"
+class ExtractSampleTensorsModule(PythonModule):          filename = "extract_sample_tensors.py";          source = f"{TIMSTOFU}/scale_estimation/extract_sample_tensors.py"
+class FitScaleEstimatesModule(PythonModule):             filename = "fit_scale_estimates.py";             source = f"{TIMSTOFU}/scale_estimation/fit_scale_estimates.py"
+class CountNeighborsModule(PythonModule):                filename = "count_neighbors.py";                 source = f"{TIMSTOFU}/candidate_selection/count_neighbors.py"
+class ScoreCandidatesModule(PythonModule):               filename = "score_candidates.py";                source = f"{TIMSTOFU}/candidate_selection/score_candidates.py"
+class AnnotateCandidatesModule(PythonModule):            filename = "annotate.py";                        source = f"{TIMSTOFU}/candidate_postprocessing/annotate.py"
+class DechargeCandidatesModule(PythonModule):            filename = "decharge.py";                        source = f"{TIMSTOFU}/candidate_postprocessing/decharge.py"
+class FilterMmappetModule(PythonModule):                 filename = "filter_mmappet.py";                  source = f"{TIMSTOFU}/cli/filter_mmappet.py"
+class WriteTof2mzTableModule(PythonModule):              filename = "write_tof2mz_table.py";              source = f"{TIMSTOFU}/cli/write_tof2mz_table.py"
+class TopCellPrecursorsModule(PythonModule):             filename = "top_cell_precursors.py";             source = f"{TIMSTOFU}/cli/top_cell_precursors.py"
+class ScoreBasedPmsmsFilterModule(PythonModule):         filename = "score_based_pmsms_filter.py";        source = f"{TIMSTOFU}/cli/score_based_pmsms_filter.py"
+class SelectRecalibrationPrecursorsModule(PythonModule): filename = "select_recalibration_precursors.py"; source = f"{TIMSTOFU}/cli/select_recalibration_precursors.py"
+class TransmitPrecursorsModule(PythonModule):            filename = "cli.py";                             source = "git/quadops/src/quadops/fragops/cli.py"
+class CutAndIndexPrecursorsModule(PythonModule):         filename = "cut_and_index_precursors.py";        source = "git/mgfops/mgf_ops/cli/cut_and_index_precursors.py"
+class MgfWritersModule(PythonModule):                    filename = "writers.py";                         source = "git/mgfops/mgf_ops/writers.py"
+class BuildPrecursorGridIndexModule(PythonModule):       filename = "build_precursor_grid_index.py";      source = "git/boxing/src/boxing/cli/build_precursor_grid_index.py"
+class PrecursorNeighborsParamsModule(PythonModule):      filename = "precursor_neighbors_params.py";      source = "git/boxing/src/boxing/cli/precursor_neighbors_params.py"
+class RecalibratePmsmsMzModule(PythonModule):            filename = "recalibrate_pmsms_mz.py";            source = f"{SEARCHOPS_CLI}/recalibrate_pmsms_mz.py"
+class RecalibratePrecursorsModule(PythonModule):         filename = "recalibrate_precursors.py";          source = f"{SEARCHOPS_CLI}/recalibrate_precursors.py"
+class PlotRecalibratedPpmModule(PythonModule):           filename = "plot_recalibrated_ppm.py";           source = f"{SEARCHOPS_CLI}/plot_recalibrated_ppm.py"
+class UpdatePrecursorsModule(PythonModule):              filename = "update_precursors.py";               source = f"{SEARCHOPS_CLI}/update_precursors.py"
+class FdrLevelsModule(PythonModule):                     filename = "fdr_levels.py";                      source = f"{SEARCHOPS_CLI}/fdr_levels.py"
+class SageSummarizeRawModule(PythonModule):              filename = "sage_summarize_raw.py";              source = f"{SEARCHOPS_CLI}/sage_summarize_raw.py"
+class SageFilterModule(PythonModule):                    filename = "sage_filter.py";                     source = f"{SEARCHOPS_CLI}/sage_filter.py"
+class SageScoreMapperModule(PythonModule):               filename = "sage_score_mapper.py";               source = f"{SEARCHOPS_CLI}/sage_score_mapper.py"
+class FeaturePredictionCliModule(PythonModule):          filename = "cli.py";                             source = "git/featureprediction/src/feature_prediction/cli.py"
+class ConfigSetModule(PythonModule):                     filename = "config_set.py";                      source = "git/necroflow/src/necroflow/tools/config_set.py"
+class MokapotPinAdapterModule(PythonModule):             filename = "mokapot_pin_adapter.py";             source = "scripts/mokapot_pin_adapter.py"
+class MokapotXgboostModule(MokapotPluginModule):         filename = "plugin.py";                          source = "git/mokapot-xgboost-plugin/src/mokapot_xgboost/plugin.py"
+class MokapotLightgbmModule(MokapotPluginModule):        filename = "plugin.py";                          source = "git/mokapot-lightgbm-plugin/src/mokapot_lightgbm/plugin.py"
+
+class TofFilteredMzml(Mzml):           pass
+class TofFilteredMzmlIdmap(MzmlIdmap): pass
+
+
+# --- documented node types ---
+class PipelineConfig(Toml):
+    """The job's complete effective config, as TOML."""
+    filename = "pipeline_config.toml"
+
+
+class ScaleEstimationConfig(Toml):
+    """`[scale_estimation]`, read by the three MS1 scale-estimation steps."""
+    filename = "scale_estimation_config.toml"
+
+
+class PrecursorNeighborCountConfig(Toml):
+    """`[precursor_neighbor_count]`, read by `count_candidate_neighbors`."""
+    filename = "precursor_neighbor_count_config.toml"
+
+
+class PrecursorCandidateSelectionConfig(Toml):
+    """`[precursor_candidate_selection]`, read by `score_candidates`."""
+    filename = "precursor_candidate_selection_config.toml"
+
+
+class PrecursorAnnotationConfig(Toml):
+    """`[precursor_annotation]`, read by `annotate_precursor_clusters`."""
+    filename = "precursor_annotation_config.toml"
+
+
+class PostprocessingConfig(Toml):
+    """`[postprocessing_of_precursors]`, read by `decharge_precursor_clusters`."""
+    filename = "postprocessing_config.toml"
+
+
+class PrecursorTransmissionConfig(Toml):
+    """`[precursor_transmission]`, read by `transmit_precursors_into_fragment_space`."""
+    filename = "precursor_transmission_config.toml"
+
+
+class PseudomsmsConfig(Toml):
+    """`[pseudomsms]`: mkpmsms' settings."""
+    filename = "pseudomsms_config.toml"
+
+
+class PrecursorNeighborsConfig(Toml):
+    """`[score_competition]` without `score_margin`: the precursor-neighbour search
+    settings."""
+    filename = "precursor_neighbors_config.toml"
+
+
+class SageConfig(Json):
+    """`[sage]` as SAGE's JSON config."""
+    filename = "sage_config.json"
+
+
+class DumpPeptidesConfig(Json):
+    """The digestion settings from `cfg.sage.database` that `dump_peptides`
+    reads (fasta, enzyme, mods, mass bounds, decoys)."""
+    filename = "dump_peptides_config.json"
+
+
+class CompactPeptidesTable(MmappetDataset):
+    """`dump_peptides --compact`'s peptide table: the rows as mmappet columns plus
+    `mass_chunks.bin`, `wide_masses.bin` and `meta.json` sidecars, read in place by
+    `sage --compact-peptides` (sliced search only)."""
+    filename = "compact_peptides.mmappet"
+
+
+class RecalibrationPrecursorSelectionConfig(Toml):
+    """`[recalibration_precursor_selection]`, read by `select_recalibration_precursors`."""
+    filename = "recalibration_precursor_selection_config.toml"
+
+
+class RecalibrationPrecursors(TofFilteredPrecursors):
+    """A subset of TofFilteredPrecursors -- accepted wherever it is, e.g. run_sage's
+    `precursors` input for the calibration-only pass."""
+    filename = "recalibration_precursors.mmappet"
+
+
+class TopCellPrecursors(RecalibrationPrecursors):
+    """Recalibration precursors whose spectrum pointers address the raw `Ms2Events`
+    store: each precursor's most probable (frame, scan)."""
+    filename = "top_cell_precursors.mmappet"
+
+
+class Tof2MzTable(MmappetDataset):
+    """Dense tof -> m/z table (float32 column `mz`): `--tof2mz` of SAGE, the mzML
+    and MGF writers, which all read fragment m/z as
+    `table[tof]` (divided by `1 + fragment_shift_ppm·1e-6` when the precursors
+    carry that column)."""
+    filename = "tof2mz.mmappet"
+
+
+class RecalibratedTof2MzTable(Tof2MzTable):
+    """Tof2MzTable with the fragment `f_mz` correction folded in (float64 column `mz`,
+    `table[t] / (1 + f_mz(table[t])·1e-6)`), produced by fit_fragment_mz.
+    Accepted wherever Tof2MzTable is."""
+    filename = "recalibrated_tof2mz.mmappet"
+
+
+class RecalibrationConfig(Toml):
+    """`[recalibration.mz]`, read by the m/z fits."""
+    filename = "recalibration_config.toml"
+
+
+class FragmentTolerance(Json):
+    """Fragment-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
+    fit_fragment_mz from its own fitted model's residuals."""
+    filename = "fragment_tolerance.json"
+
+
+class PrecursorTolerance(Json):
+    """Precursor-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
+    fit_precursor_mz from its own fitted model's residuals."""
+    filename = "precursor_tolerance.json"
+
+
+class SerializedMzModel(Node):
+    """A fitted searchops.models.MzCorrectionModel, dumped via its own save()
+    (inspection only -- fit_fragment_mz/fit_precursor_mz already
+    apply the model themselves, nothing downstream reads this back in)."""
+    filename = "mz_model"
+
+
+class FragmentShiftPpm(PrecursorColumn):
+    """Each search precursor's `fragment_shift_ppm` (`bias + f_rt(rt)`, from
+    fit_fragment_mz): SAGE divides its fragment m/z by `1 + fragment_shift_ppm·1e-6`."""
+    filename = "fragment_shift_ppm.mmappet"
+
+
+class RecalibratedPrecursors(TofFilteredPrecursors):
+    """search_precursors with update_precursors' columns set: each a one-column
+    dataset above, row-aligned and evaluated on the raw search_precursors."""
+    filename = "recalibrated_precursors.mmappet"
+
+
+class PredictedRt(MmappetDataset):
+    """The SPECLIB's Chronologer HI calibrated for this run: `rt` (float64 minutes),
+    one row per peptide row, SAGE's `--predicted-rt`."""
+    filename = "predicted_rt.mmappet"
+
+
+class SpeclibPart(Node):
+    """A SPECLIB part symlinked from the job's store."""
+
+
+class SpeclibFragments(SpeclibPart):
+    """A SPECLIB fragments part: `index.mmappet`, `arrays.mmappet`, `annotations.mmappet`."""
+    filename = "speclib_fragments"
+
+
+class SpeclibRt(SpeclibPart):
+    """A SPECLIB retention_time part: `rt.mmappet`, one predicted HI per peptide row."""
+    filename = "speclib_rt"
+
+
+class SpeclibIim(SpeclibPart):
+    """A SPECLIB inverse_ion_mobility part: `iim.mmappet`, SAGE's `--predicted-iim`."""
+    filename = "speclib_iim"
+
+
+class RtTolerance(Json):
+    """rt_tol_sec tolerance JSON (`ValueTolSpline`-shaped, wrapped as
+    `{"rt_tol_sec": {...}}` -- see `feature_prediction.tolerance
+    .write_value_tol_spline_json`). Produced by `fit_precursor_rt` from the
+    corrected residuals."""
+    filename = "rt_tolerance.json"
+
+
+class MobilityTolerance(Json):
+    """Same as `RtTolerance`, for `mobility_tol`/IIM. Produced by
+    `fit_precursor_iim`."""
+    filename = "mobility_tolerance.json"
+
+
+class PrecursorCorrectionIimModels(Node):
+    """A directory of per-charge XGBoost models (`{charge}.json`, plus a
+    pooled fallback `0.json`) -- see `precursor_correction.fit_iim_correction`."""
+    filename = "precursor_correction_iim_models"
+# fmt: on
+
+
+MOKAPOT_PLUGIN_MODULES = {"xgboost": MokapotXgboostModule, "lightgbm": MokapotLightgbmModule}
 
 
 def fasta_paths(cfg) -> list[str]:
@@ -98,629 +405,6 @@ def single_fasta_path(cfg, workflow_name: str) -> str:
             f"{workflow_name} searches one FASTA; this job lists {len(paths)} in fasta_paths"
         )
     return paths[0]
-
-
-class MkpmsmsBinary(Executable):
-    filename = "mkpmsms"
-
-
-class SageBinary(Executable):
-    filename = "sage"
-
-
-class SageSummarizeModule(Node):
-    filename = "sage.py"
-
-
-class Tdf2msBinary(Executable):
-    filename = "tdf2ms"
-
-
-class PrecursorNeighborsCsrBinary(Executable):
-    filename = "precursor_neighbors_csr"
-
-
-class TofFilterBinary(Executable):
-    filename = "tof_filter"
-
-
-class Pmsms2mzmlBinary(Executable):
-    filename = "pmsms2mzml"
-
-
-class PythonModule(Node):
-    """The module a Python tool's launcher imports, at `source`: an input of the steps
-    running the tool, so that editing it reruns them. Edits deeper in its package are not
-    tracked. One subclass per tool, so a step accepts only its own tool's module."""
-
-    source: str
-
-
-TIMSTOFU = "git/timstofu/src/timstofu"
-SEARCHOPS_CLI = "git/searchops/src/searchops/cli"
-
-
-class FindArgmaxesModule(PythonModule):
-    filename = "find_argmaxes.py"
-    source = f"{TIMSTOFU}/scale_estimation/find_argmaxes.py"
-
-
-class ExtractSampleTensorsModule(PythonModule):
-    filename = "extract_sample_tensors.py"
-    source = f"{TIMSTOFU}/scale_estimation/extract_sample_tensors.py"
-
-
-class FitScaleEstimatesModule(PythonModule):
-    filename = "fit_scale_estimates.py"
-    source = f"{TIMSTOFU}/scale_estimation/fit_scale_estimates.py"
-
-
-class CountNeighborsModule(PythonModule):
-    filename = "count_neighbors.py"
-    source = f"{TIMSTOFU}/candidate_selection/count_neighbors.py"
-
-
-class ScoreCandidatesModule(PythonModule):
-    filename = "score_candidates.py"
-    source = f"{TIMSTOFU}/candidate_selection/score_candidates.py"
-
-
-class AnnotateCandidatesModule(PythonModule):
-    filename = "annotate.py"
-    source = f"{TIMSTOFU}/candidate_postprocessing/annotate.py"
-
-
-class DechargeCandidatesModule(PythonModule):
-    filename = "decharge.py"
-    source = f"{TIMSTOFU}/candidate_postprocessing/decharge.py"
-
-
-class FilterMmappetModule(PythonModule):
-    filename = "filter_mmappet.py"
-    source = f"{TIMSTOFU}/cli/filter_mmappet.py"
-
-
-class WriteTof2mzTableModule(PythonModule):
-    filename = "write_tof2mz_table.py"
-    source = f"{TIMSTOFU}/cli/write_tof2mz_table.py"
-
-
-class TopCellPrecursorsModule(PythonModule):
-    filename = "top_cell_precursors.py"
-    source = f"{TIMSTOFU}/cli/top_cell_precursors.py"
-
-
-class ScoreBasedPmsmsFilterModule(PythonModule):
-    filename = "score_based_pmsms_filter.py"
-    source = f"{TIMSTOFU}/cli/score_based_pmsms_filter.py"
-
-
-class SelectRecalibrationPrecursorsModule(PythonModule):
-    filename = "select_recalibration_precursors.py"
-    source = f"{TIMSTOFU}/cli/select_recalibration_precursors.py"
-
-
-class TransmitPrecursorsModule(PythonModule):
-    filename = "cli.py"
-    source = "git/quadops/src/quadops/fragops/cli.py"
-
-
-class CutAndIndexPrecursorsModule(PythonModule):
-    filename = "cut_and_index_precursors.py"
-    source = "git/mgfops/mgf_ops/cli/cut_and_index_precursors.py"
-
-
-class MgfWritersModule(PythonModule):
-    filename = "writers.py"
-    source = "git/mgfops/mgf_ops/writers.py"
-
-
-class BuildPrecursorGridIndexModule(PythonModule):
-    filename = "build_precursor_grid_index.py"
-    source = "git/boxing/src/boxing/cli/build_precursor_grid_index.py"
-
-
-class PrecursorNeighborsParamsModule(PythonModule):
-    filename = "precursor_neighbors_params.py"
-    source = "git/boxing/src/boxing/cli/precursor_neighbors_params.py"
-
-
-class RecalibratePmsmsMzModule(PythonModule):
-    filename = "recalibrate_pmsms_mz.py"
-    source = f"{SEARCHOPS_CLI}/recalibrate_pmsms_mz.py"
-
-
-class RecalibratePrecursorsModule(PythonModule):
-    filename = "recalibrate_precursors.py"
-    source = f"{SEARCHOPS_CLI}/recalibrate_precursors.py"
-
-
-class PlotRecalibratedPpmModule(PythonModule):
-    filename = "plot_recalibrated_ppm.py"
-    source = f"{SEARCHOPS_CLI}/plot_recalibrated_ppm.py"
-
-
-class UpdatePrecursorsModule(PythonModule):
-    filename = "update_precursors.py"
-    source = f"{SEARCHOPS_CLI}/update_precursors.py"
-
-
-class FdrLevelsModule(PythonModule):
-    filename = "fdr_levels.py"
-    source = f"{SEARCHOPS_CLI}/fdr_levels.py"
-
-
-class SageSummarizeRawModule(PythonModule):
-    filename = "sage_summarize_raw.py"
-    source = f"{SEARCHOPS_CLI}/sage_summarize_raw.py"
-
-
-class SageFilterModule(PythonModule):
-    filename = "sage_filter.py"
-    source = f"{SEARCHOPS_CLI}/sage_filter.py"
-
-
-class SageScoreMapperModule(PythonModule):
-    filename = "sage_score_mapper.py"
-    source = f"{SEARCHOPS_CLI}/sage_score_mapper.py"
-
-
-class FeaturePredictionCliModule(PythonModule):
-    filename = "cli.py"
-    source = "git/featureprediction/src/feature_prediction/cli.py"
-
-
-class ConfigSetModule(PythonModule):
-    filename = "config_set.py"
-    source = "git/necroflow/src/necroflow/tools/config_set.py"
-
-
-class MokapotPinAdapterModule(PythonModule):
-    filename = "mokapot_pin_adapter.py"
-    source = "scripts/mokapot_pin_adapter.py"
-
-
-class MokapotPluginModule(PythonModule):
-    """A mokapot plugin's module, by its `--plugin` name in `MOKAPOT_PLUGIN_MODULES`."""
-
-
-class MokapotXgboostModule(MokapotPluginModule):
-    filename = "plugin.py"
-    source = "git/mokapot-xgboost-plugin/src/mokapot_xgboost/plugin.py"
-
-
-class MokapotLightgbmModule(MokapotPluginModule):
-    filename = "plugin.py"
-    source = "git/mokapot-lightgbm-plugin/src/mokapot_lightgbm/plugin.py"
-
-
-MOKAPOT_PLUGIN_MODULES = {"xgboost": MokapotXgboostModule, "lightgbm": MokapotLightgbmModule}
-
-
-# --- compute artifact node types ---
-class PipelineConfig(Toml):
-    """The job's complete effective config, as TOML."""
-
-    filename = "pipeline_config.toml"
-
-
-class Ms1Events(Node):
-    filename = "events.ms1"
-
-
-class Ms2Events(Node):
-    filename = "events.ms2"
-
-
-class Ms2TfsEvents(MmappetDataset):
-    filename = "events_ms2_tfs.mmappet"
-
-
-class Ms2TsfEvents(MmappetDataset):
-    filename = "events_ms2_tsf.mmappet"
-
-
-class ScaleEstimationConfig(Toml):
-    """`[scale_estimation]`, read by the three MS1 scale-estimation steps."""
-
-    filename = "scale_estimation_config.toml"
-
-
-class ArgmaxSample(MmappetDataset):
-    filename = "argmax_sample.mmappet"
-
-
-class ArgmaxSieveStats(Toml):
-    filename = "sieve_stats.toml"
-
-
-class SampleTensors(MmappetDataset):
-    filename = "sample_tensors.mmappet"
-
-
-class ScaleEstimates(Node):
-    filename = "scale_estimates"
-
-
-class PrecursorNeighborCountConfig(Toml):
-    """`[precursor_neighbor_count]`, read by `count_candidate_neighbors`."""
-
-    filename = "precursor_neighbor_count_config.toml"
-
-
-class PrecursorCandidateSelectionConfig(Toml):
-    """`[precursor_candidate_selection]`, read by `score_candidates`."""
-
-    filename = "precursor_candidate_selection_config.toml"
-
-
-class RawCandidateFeatures(MmappetDataset):
-    filename = "raw_candidate_features.mmappet"
-
-
-class RawPrecursorClusters(MmappetDataset):
-    filename = "raw_precursor_clusters.mmappet"
-
-
-class PrecursorAnnotationConfig(Toml):
-    """`[precursor_annotation]`, read by `annotate_precursor_clusters`."""
-
-    filename = "precursor_annotation_config.toml"
-
-
-class PostprocessingConfig(Toml):
-    """`[postprocessing_of_precursors]`, read by `decharge_precursor_clusters`."""
-
-    filename = "postprocessing_config.toml"
-
-
-class AnnotatedPrecursorClusters(MmappetDataset):
-    filename = "annotated_precursor_clusters.mmappet"
-
-
-class PostprocessedPrecursorClusters(MmappetDataset):
-    filename = "postprocessed_precursor_clusters.mmappet"
-
-
-class PrecursorTransmissionConfig(Toml):
-    """`[precursor_transmission]`, read by `transmit_precursors_into_fragment_space`."""
-
-    filename = "precursor_transmission_config.toml"
-
-
-class TransmittedMs1Events(MmappetDataset):
-    filename = "transmitted_ms1events.mmappet"
-
-
-class TransmittedPrecursorClusters(MmappetDataset):
-    filename = "transmitted_precursors.mmappet"
-
-
-class FirstFilterPrecursors(MmappetDataset):
-    filename = "first_filter_precursors.mmappet"
-
-
-class PseudomsmsConfig(Toml):
-    """`[pseudomsms]`: mkpmsms' settings."""
-
-    filename = "pseudomsms_config.toml"
-
-
-class Pmsms(MmappetDataset):
-    filename = "pmsms.mmappet"
-
-
-class Ms2IndexedPrecursors(MmappetDataset):
-    filename = "ms2indexed_precursors.mmappet"
-
-
-class PreSageFilteredPrecursors(MmappetDataset):
-    filename = "pre_sage_filtered_precursors.mmappet"
-
-
-class PrecursorNeighborsConfig(Toml):
-    """`[score_competition]` without `score_margin`: the precursor-neighbour search
-    settings."""
-
-    filename = "precursor_neighbors_config.toml"
-
-
-class PrecursorGridIndex(Node):
-    filename = "precursor_grid_index"
-
-
-class PrecursorNeighborsCsr(Node):
-    filename = "precursor_neighbors_csr"
-
-
-class NeighborScore(MmappetDataset):
-    filename = "neighbor_score.mmappet"
-
-
-class TofFilteredPmsms(Pmsms):
-    filename = "tof_filtered_pmsms.mmappet"
-
-
-class TofFilteredPrecursors(PreSageFilteredPrecursors):
-    filename = "tof_filtered_precursors.mmappet"
-
-
-class SageConfig(Json):
-    """`[sage]` as SAGE's JSON config."""
-
-    filename = "sage_config.json"
-
-
-class SageResultsJson(Json):
-    filename = "results.json"
-
-
-class Pin(Node):
-    """A Percolator-IN TSV: SpecId, Label, ScanNr, <features...>, Peptide,
-    Proteins. Format is generic (nothing Sage-specific) -- `SageResultsPin`
-    and `SagepyRescorePin` both satisfy it, so `mokapot` accepts either."""
-
-
-class SageResultsPin(Pin):
-    filename = "results.sage.pin"
-
-
-class SageResultsTsv(Tsv):
-    filename = "results.sage.tsv"
-
-
-class SageMatchedFragments(Tsv):
-    filename = "matched_fragments.sage.tsv"
-
-
-class SageFdrLevels(Tsv):
-    filename = "results.sage.fdr_levels.tsv"
-
-
-class DumpPeptidesBinary(Executable):
-    filename = "dump_peptides"
-
-
-class DumpPeptidesConfig(Json):
-    """The digestion settings from `cfg.sage.database` that `dump_peptides`
-    reads (fasta, enzyme, mods, mass bounds, decoys)."""
-
-    filename = "dump_peptides_config.json"
-
-
-class CompactPeptidesTable(MmappetDataset):
-    """`dump_peptides --compact`'s peptide table: the rows as mmappet columns plus
-    `mass_chunks.bin`, `wide_masses.bin` and `meta.json` sidecars, read in place by
-    `sage --compact-peptides` (sliced search only)."""
-
-    filename = "compact_peptides.mmappet"
-
-
-class MokapotUsedPin(Pin):
-    filename = "used.pin"
-
-
-class MokapotPeptides(Tsv):
-    filename = "mokapot.peptides.txt"
-
-
-class MokapotPsms(Tsv):
-    filename = "mokapot.psms.txt"
-
-
-class MokapotFdrLevels(Tsv):
-    filename = "mokapot.fdr_levels.tsv"
-
-
-class ConfidentPsmsParquet(Node):
-    filename = "confident_psms.parquet"
-
-
-class ScoreComparisonPlots(Node):
-    filename = "score_comparison"
-
-
-class Mzml(Node):
-    filename = "mzml.mzML"
-
-
-class MzmlIdmap(MmappetDataset):
-    filename = "idmap.mmappet"
-
-
-class Mgf(Node):
-    filename = "spectra.mgf"
-
-
-class TofFilteredMzml(Mzml):
-    pass
-
-
-class TofFilteredMzmlIdmap(MzmlIdmap):
-    pass
-
-
-class TofFilteredMgf(Mgf):
-    filename = "tof_filtered.mgf"
-
-
-class TarGz(Node):
-    filename = "archive.tar.gz"
-
-
-class SageSummary(Tsv):
-    filename = "results.sage.summary.tsv"
-
-
-class RecalibrationPrecursorSelectionConfig(Toml):
-    """`[recalibration_precursor_selection]`, read by `select_recalibration_precursors`."""
-
-    filename = "recalibration_precursor_selection_config.toml"
-
-
-class RecalibrationPrecursors(TofFilteredPrecursors):
-    """A subset of TofFilteredPrecursors -- accepted wherever it is, e.g. run_sage's
-    `precursors` input for the calibration-only pass."""
-
-    filename = "recalibration_precursors.mmappet"
-
-
-class TopCellPrecursors(RecalibrationPrecursors):
-    """Recalibration precursors whose spectrum pointers address the raw `Ms2Events`
-    store: each precursor's most probable (frame, scan)."""
-
-    filename = "top_cell_precursors.mmappet"
-
-
-class Tof2MzTable(MmappetDataset):
-    """Dense tof -> m/z table (float32 column `mz`): `--tof2mz` of SAGE, the mzML
-    and MGF writers, which all read fragment m/z as
-    `table[tof]` (divided by `1 + fragment_shift_ppm·1e-6` when the precursors
-    carry that column)."""
-
-    filename = "tof2mz.mmappet"
-
-
-class RecalibratedTof2MzTable(Tof2MzTable):
-    """Tof2MzTable with the fragment `f_mz` correction folded in (float64 column `mz`,
-    `table[t] / (1 + f_mz(table[t])·1e-6)`), produced by fit_fragment_mz.
-    Accepted wherever Tof2MzTable is."""
-
-    filename = "recalibrated_tof2mz.mmappet"
-
-
-class RecalibrationConfig(Toml):
-    """`[recalibration.mz]`, read by the m/z fits."""
-
-    filename = "recalibration_config.toml"
-
-
-class FragmentTolerance(Json):
-    """Fragment-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
-    fit_fragment_mz from its own fitted model's residuals."""
-
-    filename = "fragment_tolerance.json"
-
-
-class PrecursorTolerance(Json):
-    """Precursor-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
-    fit_precursor_mz from its own fitted model's residuals."""
-
-    filename = "precursor_tolerance.json"
-
-
-class SerializedMzModel(Node):
-    """A fitted searchops.models.MzCorrectionModel, dumped via its own save()
-    (inspection only -- fit_fragment_mz/fit_precursor_mz already
-    apply the model themselves, nothing downstream reads this back in)."""
-
-    filename = "mz_model"
-
-
-class PrecursorColumn(MmappetDataset):
-    """One column row-aligned with search_precursors, set by update_precursors."""
-
-
-class FragmentShiftPpm(PrecursorColumn):
-    """Each search precursor's `fragment_shift_ppm` (`bias + f_rt(rt)`, from
-    fit_fragment_mz): SAGE divides its fragment m/z by `1 + fragment_shift_ppm·1e-6`."""
-
-    filename = "fragment_shift_ppm.mmappet"
-
-
-class CorrectedMz(PrecursorColumn):
-    filename = "corrected_mz.mmappet"
-
-
-class CorrectedRt(PrecursorColumn):
-    filename = "corrected_rt.mmappet"
-
-
-class CorrectedIim(PrecursorColumn):
-    filename = "corrected_inv_ion_mobility.mmappet"
-
-
-class RecalibratedPrecursors(TofFilteredPrecursors):
-    """search_precursors with update_precursors' columns set: each a one-column
-    dataset above, row-aligned and evaluated on the raw search_precursors."""
-
-    filename = "recalibrated_precursors.mmappet"
-
-
-class FragmentMzFitPlot(Png):
-    filename = "fragment_mz_fit_plot.png"
-
-
-class PrecursorMzFitPlot(Png):
-    filename = "precursor_mz_fit_plot.png"
-
-
-class RecalibratedPpmPlot(Png):
-    filename = "recalibrated_ppm.png"
-
-
-class PredictedRt(MmappetDataset):
-    """The SPECLIB's Chronologer HI calibrated for this run: `rt` (float64 minutes),
-    one row per peptide row, SAGE's `--predicted-rt`."""
-
-    filename = "predicted_rt.mmappet"
-
-
-class SpeclibPart(Node):
-    """A SPECLIB part symlinked from the job's store."""
-
-
-class SpeclibFragments(SpeclibPart):
-    """A SPECLIB fragments part: `index.mmappet`, `arrays.mmappet`, `annotations.mmappet`."""
-
-    filename = "speclib_fragments"
-
-
-class SpeclibRt(SpeclibPart):
-    """A SPECLIB retention_time part: `rt.mmappet`, one predicted HI per peptide row."""
-
-    filename = "speclib_rt"
-
-
-class SpeclibIim(SpeclibPart):
-    """A SPECLIB inverse_ion_mobility part: `iim.mmappet`, SAGE's `--predicted-iim`."""
-
-    filename = "speclib_iim"
-
-
-class RtTolerance(Json):
-    """rt_tol_sec tolerance JSON (`ValueTolSpline`-shaped, wrapped as
-    `{"rt_tol_sec": {...}}` -- see `feature_prediction.tolerance
-    .write_value_tol_spline_json`). Produced by `fit_precursor_rt` from the
-    corrected residuals."""
-
-    filename = "rt_tolerance.json"
-
-
-class MobilityTolerance(Json):
-    """Same as `RtTolerance`, for `mobility_tol`/IIM. Produced by
-    `fit_precursor_iim`."""
-
-    filename = "mobility_tolerance.json"
-
-
-class PrecursorCorrectionRtModel(Json):
-    filename = "precursor_correction_rt_model.json"
-
-
-class PrecursorCorrectionIimModels(Node):
-    """A directory of per-charge XGBoost models (`{charge}.json`, plus a
-    pooled fallback `0.json`) -- see `precursor_correction.fit_iim_correction`."""
-
-    filename = "precursor_correction_iim_models"
-
-
-class PrecursorCorrectionRtFitPlot(Png):
-    filename = "precursor_correction_rt_fit_plot.png"
-
-
-class PrecursorCorrectionIimFitPlot(Png):
-    filename = "precursor_correction_iim_fit_plot.png"
 
 
 def tool_module(module: type[PythonModule]) -> PythonModule:

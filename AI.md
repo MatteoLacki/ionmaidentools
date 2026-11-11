@@ -94,6 +94,8 @@ top-level monorepo's `summarise/fingerprints.json`).
 
 ## Conventions to follow when editing this file
 
+- Class grouping, compact table alignment, formatter guards, and docstring spacing
+  follow the formatting convention in the module docstring of `src/ionmaidentools/pipelines.py`.
 - Design rationale, migration history, and "why this and not that" reasoning belongs
   in this file or `docs/ai/*.md` (never in `pipelines.py` docstrings — keep code
   docstrings about what the code does now, not why it changed).
