@@ -1,5 +1,9 @@
 # AI.md — ionmaidentools
 
+History lives in `AI_CHANGELOG.md` (append-only; read it for *why* something changed).
+This file is present tense: a change rewrites its sentence here and appends an entry
+there, in the same commit.
+
 ## What this repo is
 
 `src/ionmaidentools/pipelines.py` holds the necroflow workflow for the ionmaiden
@@ -37,8 +41,8 @@ points registered — this package is imported by necroflow's job runner (`./nf`
   are decorated `@workflow`, so `P` is the active Pipeline while one runs and rules are
   called without it: `P.some_label = some_rule(parent_node, ..., scalar_kwarg=...)`.
   Helpers defined inside a workflow (e.g. `_finalize_confident_psms`) use the same
-  active Pipeline. Necroflow still accepts an explicit leading `P`; this module no
-  longer passes it.
+  active Pipeline. Necroflow also accepts an explicit leading `P`; this module does
+  not pass it.
 - Config files are `text_file(Type, text)` calls in the workflow (the `Type` docstring says
   which job section it holds and which step reads it). Both workflows serialize their
   complete Necroflow-supplied config as `text_file(PipelineConfig, ...)`, requestable as
@@ -49,6 +53,9 @@ points registered — this package is imported by necroflow's job runner (`./nf`
 - Every rule shells out to a real installed/patched CLI directly — no bespoke Python
   wrapper CLIs. External tools live at fixed, pre-installed paths (`git/sage/target/release`,
   `software/fragpipe/fragpipe-24.0`), same convention on both sides.
+- A plain scalar rule param can never be passed a literal `None`: necroflow records it in
+  `dependencies.toml` through tomlkit, which raises `_ConvertError` on `None`. Use `""` (or
+  another falsy, serializable sentinel the command template tests for).
 - See root `CLAUDE.md`'s "Precursor table format" — all precursor tables in this pipeline
   are `.mmappet` directories (`MmappetDataset` subclasses here), never intermediate parquet.
 
@@ -73,19 +80,17 @@ Both FragPipe workflows run the same search, `fragpipe_search` (`symlink(Fragpip
 
 ## Documentation index
 
-This file stays a short overview; design rationale, migration history, and real
-measurements for each feature live in `docs/ai/`, one file per topic:
+This file stays a short overview; design rationale and the measured line behind a choice
+live in `docs/ai/`, one file per topic; history goes in `AI_CHANGELOG.md`:
 
 | File | Covers |
 |------|--------|
 | `docs/ai/ms1_ms2_extraction.md` | C++ MS1 extraction, compact/query-oriented MS2 benchmark targets |
-| `docs/ai/fragment_intensity.md` | Fragment-intensity `PredictionCache`, its export and `run_sage` wiring -- removed 2026-10-26; SPECLIB (`[speclib]`, `check_speclib`) is the only source now |
-| `docs/ai/recalibration_modes.md` | The three mz/RT/IIM recalibration modes, table-presence gating, tolerance percentiles/method, fragment m/z correction applied inside SAGE (`fragment_shift_ppm`) |
-| `docs/ai/run_sage_merge.md` | `run_sage`/`run_sage_with_predicted` merged into one mixed-Node/value rule |
-| `docs/ai/mokapot_integration.md` | Config-driven mokapot plugin, leakage-safe PIN filtering, real F9477 ablation-grid measurements |
+| `docs/ai/recalibration_modes.md` | m/z, RT, IIM recalibration gated by table presence, per-table tolerances, `[recalibration_top_cell]`, `fit_mz` |
+| `docs/ai/run_sage_merge.md` | `run_sage`: one rule, optional predictions as mixed Node/`None` inputs, `_run_sage_command` |
+| `docs/ai/mokapot_integration.md` | Forked mokapot CLI, seeding, plugins, GPU, threads, leakage-safe PIN |
 | `docs/ai/fdr_levels.md` | Spectra/peptidoforms/ions at 1% FDR as the last step of `run_sage`/`mokapot`, and recording runs in `$ION_MAIDEN_REGRESSION_DB` |
-| `docs/ai/rt_iim_caching.md` | `predict_rt`/`predict_iim`'s `PredictionCache` wiring, necroflow gotchas, measured payoff -- removed 2026-10-27; RT/IIM come from the SPECLIB (`[recalibration.rt]`/`.iim]` require its parts) |
-| `docs/ai/mapped_inputs.md` | `dump_compact_peptides`/`CompactPeptidesTable` for the sliced search, and the prediction nodes as mmappet datasets SAGE maps (2026-10-17) |
+| `docs/ai/mapped_inputs.md` | `dump_compact_peptides`/`CompactPeptidesTable` for the sliced search, and the prediction nodes as mmappet datasets SAGE maps |
 | `docs/ai/bestrun.md` | `jobs/f9477_best.toml` — the standing best-known-config job, current numbers, and the ask-before-updating rule |
 
 Check freshness against `git log` on the file(s) a `docs/ai/*.md` entry names if something
@@ -96,8 +101,8 @@ top-level monorepo's `summarise/fingerprints.json`).
 
 - Class grouping, compact table alignment, formatter guards, and docstring spacing
   follow the formatting convention in the module docstring of `src/ionmaidentools/pipelines.py`.
-- Design rationale, migration history, and "why this and not that" reasoning belongs
-  in this file or `docs/ai/*.md` (never in `pipelines.py` docstrings — keep code
+- Design rationale and "why this and not that" reasoning belongs in this file or
+  `docs/ai/*.md`, history in `AI_CHANGELOG.md` (never in `pipelines.py` docstrings — keep code
   docstrings about what the code does now, not why it changed).
 - Before appending a substantial new section to this root file, check whether it
   belongs in an existing `docs/ai/*.md` topic instead, or needs a new one — keep this

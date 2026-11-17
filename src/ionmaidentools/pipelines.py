@@ -154,8 +154,7 @@ class SageSummary(Tsv):                                 filename = "results.sage
 class CorrectedMz(PrecursorColumn):                     filename = "corrected_mz.mmappet"
 class CorrectedRt(PrecursorColumn):                     filename = "corrected_rt.mmappet"
 class CorrectedIim(PrecursorColumn):                    filename = "corrected_inv_ion_mobility.mmappet"
-class FragmentMzFitPlot(Png):                           filename = "fragment_mz_fit_plot.png"
-class PrecursorMzFitPlot(Png):                          filename = "precursor_mz_fit_plot.png"
+class MzFitPlot(Png):                                   filename = "mz_fit_plot.png"
 class RecalibratedPpmPlot(Png):                         filename = "recalibrated_ppm.png"
 class PrecursorCorrectionRtModel(Json):                 filename = "precursor_correction_rt_model.json"
 class PrecursorCorrectionRtFitPlot(Png):                filename = "precursor_correction_rt_fit_plot.png"
@@ -178,8 +177,7 @@ class CutAndIndexPrecursorsModule(PythonModule):         filename = "cut_and_ind
 class MgfWritersModule(PythonModule):                    filename = "writers.py";                         source = "git/mgfops/mgf_ops/writers.py"
 class BuildPrecursorGridIndexModule(PythonModule):       filename = "build_precursor_grid_index.py";      source = "git/boxing/src/boxing/cli/build_precursor_grid_index.py"
 class PrecursorNeighborsParamsModule(PythonModule):      filename = "precursor_neighbors_params.py";      source = "git/boxing/src/boxing/cli/precursor_neighbors_params.py"
-class RecalibratePmsmsMzModule(PythonModule):            filename = "recalibrate_pmsms_mz.py";            source = f"{SEARCHOPS_CLI}/recalibrate_pmsms_mz.py"
-class RecalibratePrecursorsModule(PythonModule):         filename = "recalibrate_precursors.py";          source = f"{SEARCHOPS_CLI}/recalibrate_precursors.py"
+class RecalibrateMzModule(PythonModule):                 filename = "recalibrate_mz.py";                  source = f"{SEARCHOPS_CLI}/recalibrate_mz.py"
 class PlotRecalibratedPpmModule(PythonModule):           filename = "plot_recalibrated_ppm.py";           source = f"{SEARCHOPS_CLI}/plot_recalibrated_ppm.py"
 class UpdatePrecursorsModule(PythonModule):              filename = "update_precursors.py";               source = f"{SEARCHOPS_CLI}/update_precursors.py"
 class FdrLevelsModule(PythonModule):                     filename = "fdr_levels.py";                      source = f"{SEARCHOPS_CLI}/fdr_levels.py"
@@ -280,47 +278,39 @@ class TopCellPrecursors(RecalibrationPrecursors):
 
 class Tof2MzTable(MmappetDataset):
     """Dense tof -> m/z table (float32 column `mz`): `--tof2mz` of SAGE, the mzML
-    and MGF writers, which all read fragment m/z as
-    `table[tof]` (divided by `1 + fragment_shift_ppm·1e-6` when the precursors
-    carry that column)."""
+    and MGF writers, which all read fragment m/z as `table[tof]`."""
     filename = "tof2mz.mmappet"
 
 
 class RecalibratedTof2MzTable(Tof2MzTable):
-    """Tof2MzTable with the fragment `f_mz` correction folded in (float64 column `mz`,
-    `table[t] / (1 + f_mz(table[t])·1e-6)`), produced by fit_fragment_mz.
+    """Tof2MzTable with fit_mz's m/z correction `f` folded in (float64 column `mz`,
+    `table[t] / (1 + f(table[t])·1e-6)`).
     Accepted wherever Tof2MzTable is."""
     filename = "recalibrated_tof2mz.mmappet"
 
 
 class RecalibrationConfig(Toml):
-    """`[recalibration.mz]`, read by the m/z fits."""
+    """`[recalibration.mz]`, read by fit_mz."""
     filename = "recalibration_config.toml"
 
 
 class FragmentTolerance(Json):
-    """Fragment-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
-    fit_fragment_mz from its own fitted model's residuals."""
+    """Fragment tolerance JSON (`{"ppm": [lo, hi]}`), from fragment residuals under
+    fit_mz's model."""
     filename = "fragment_tolerance.json"
 
 
 class PrecursorTolerance(Json):
-    """Precursor-residual tolerance JSON (`{"ppm": [lo, hi]}`), produced by
-    fit_precursor_mz from its own fitted model's residuals."""
+    """Precursor tolerance JSON (`{"ppm": [lo, hi]}`), from precursor residuals under
+    fit_mz's model."""
     filename = "precursor_tolerance.json"
 
 
 class SerializedMzModel(Node):
     """A fitted searchops.models.MzCorrectionModel, dumped via its own save()
-    (inspection only -- fit_fragment_mz/fit_precursor_mz already
-    apply the model themselves, nothing downstream reads this back in)."""
+    (inspection only -- fit_mz applies the model itself, nothing downstream reads
+    this back in)."""
     filename = "mz_model"
-
-
-class FragmentShiftPpm(PrecursorColumn):
-    """Each search precursor's `fragment_shift_ppm` (`bias + f_rt(rt)`, from
-    fit_fragment_mz): SAGE divides its fragment m/z by `1 + fragment_shift_ppm·1e-6`."""
-    filename = "fragment_shift_ppm.mmappet"
 
 
 class RecalibratedPrecursors(TofFilteredPrecursors):
@@ -811,48 +801,28 @@ def select_recalibration_precursors(
 
 
 @command
-def fit_fragment_mz(
+def fit_mz(
     sage_results_tsv: SageResultsTsv,
     matched_fragments: SageMatchedFragments,
     tof2mz: Tof2MzTable,
     precursors: PreSageFilteredPrecursors,
     config: RecalibrationConfig,
-    tool: RecalibratePmsmsMzModule,
+    tool: RecalibrateMzModule,
     fdr: int | float,
 ):
-    """Fragment m/z correction fitted on the first search's confident matches: a
-    recalibrated tof2mz table, each precursor's `fragment_shift_ppm`, the fragment
-    tolerance and a plot."""
-    fragment_shift_ppm, recalibrated_tof2mz, tolerance, plot = outputs(
-        FragmentShiftPpm, RecalibratedTof2MzTable, FragmentTolerance, FragmentMzFitPlot
+    """One m/z correction fitted on the first search's confident precursors and applied
+    to precursors and fragments: corrected precursor m/z, a recalibrated tof2mz table,
+    precursor and fragment tolerances, a plot and the fitted model."""
+    mz, recalibrated_tof2mz, precursor_tolerance, fragment_tolerance, plot, model = outputs(
+        CorrectedMz, RecalibratedTof2MzTable, PrecursorTolerance, FragmentTolerance, MzFitPlot,
+        SerializedMzModel,
     )
     shell(
-        "venvs/common/bin/recalibrate-pmsms-mz {sage_results_tsv} {matched_fragments}"
-        " {tof2mz} {precursors} {fragment_shift_ppm} {recalibrated_tof2mz} {tolerance} {plot}"
-        " --config {config} --fdr {fdr}"
+        "venvs/common/bin/recalibrate-mz {sage_results_tsv} {matched_fragments} {tof2mz}"
+        " {precursors} {mz} {recalibrated_tof2mz} {precursor_tolerance} {fragment_tolerance}"
+        " {plot} {model} --config {config} --fdr {fdr}"
     )
-    return fragment_shift_ppm, recalibrated_tof2mz, tolerance, plot
-
-
-@command
-def fit_precursor_mz(
-    sage_results_tsv: SageResultsTsv,
-    precursors: PreSageFilteredPrecursors,
-    config: RecalibrationConfig,
-    tool: RecalibratePrecursorsModule,
-    fdr: int | float,
-    threads: Resource[int] = CORES,
-):
-    """Precursor m/z corrected on the first search's confident PSMs, with the precursor
-    tolerance, a plot and the fitted model."""
-    mz, tolerance, plot, model = outputs(
-        CorrectedMz, PrecursorTolerance, PrecursorMzFitPlot, SerializedMzModel
-    )
-    shell(
-        "venvs/common/bin/recalibrate-precursors {sage_results_tsv} {precursors}"
-        " {mz} {tolerance} {plot} {model} --config {config} --fdr {fdr}"
-    )
-    return mz, tolerance, plot, model
+    return mz, recalibrated_tof2mz, precursor_tolerance, fragment_tolerance, plot, model
 
 
 @command
@@ -1004,9 +974,7 @@ def run_sage(
     is either a pmsms, or the raw `Ms2Events` store, read in place as
     `<events.ms2>/data.mmappet` with `precursors` addressing its spectra (e.g.
     `top_cell_precursors`). For the recalibrated final search `tof2mz` is a
-    RecalibratedTof2MzTable and `precursors` carry `fragment_shift_ppm`
-    (RecalibratedPrecursors, from update_precursors), which Sage applies
-    whenever the column is present. See plans/fragment_mz_corrected_tof2mz_table.md.
+    RecalibratedTof2MzTable. See plans/fragment_mz_corrected_tof2mz_table.md.
 
     `fdr_levels` holds the confident spectra, peptidoforms and ions at 1% FDR
     (`sage-fdr-levels`), which also records the run in `$ION_MAIDEN_REGRESSION_DB`.
@@ -1148,16 +1116,14 @@ def update_sage_config(
 def update_precursors(
     precursors: PreSageFilteredPrecursors,
     tool: UpdatePrecursorsModule,
-    fragment_shift_ppm: FragmentShiftPpm | None = None,
     mz: CorrectedMz | None = None,
     rt: CorrectedRt | None = None,
     inv_ion_mobility: CorrectedIim | None = None,
 ):
-    """`precursors` with each given correction column (fragment shift, m/z, RT, 1/K0) set
-    in."""
+    """`precursors` with each given correction column (m/z, RT, 1/K0) set in."""
     recalibrated_precursors = outputs(RecalibratedPrecursors)
 
-    columns = (fragment_shift_ppm, mz, rt, inv_ion_mobility)
+    columns = (mz, rt, inv_ion_mobility)
     column_paths = "".join(f" {_quoted(column.path)}" for column in columns if column is not None)
     shell("venvs/common/bin/update-precursors {precursors} {recalibrated_precursors}" + column_paths)
 
@@ -1668,32 +1634,22 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
                     RecalibrationConfig, tomlkit.dumps(cfg.recalibration.mz)
                 )
                 (
-                    P.fragment_shift_ppm,
+                    P.corrected_mz,
                     P.recalibrated_tof2mz_table,
+                    P.precursor_mz_search_tolerance,
                     P.fragment_mz_search_tolerance,
-                    P.fragment_mz_recalibration_fit_plot,
-                ) = fit_fragment_mz(
+                    P.mz_recalibration_fit_plot,
+                    P.mz_recalibration_model,
+                ) = fit_mz(
                     P.filtered_sage_results_tsv,
                     P.filtered_sage_matched_fragments,
                     P.tof2mz_table,
                     P.search_precursors,
                     P.recalibration_config,
                     fdr=cfg.sage_summarize.fdr,
-                    tool=tool_module(RecalibratePmsmsMzModule),
+                    tool=tool_module(RecalibrateMzModule),
                 )
-                (
-                    P.corrected_mz,
-                    P.precursor_mz_search_tolerance,
-                    P.precursor_mz_recalibration_fit_plot,
-                    P.precursro_mz_recalibration_model_serialization,
-                ) = fit_precursor_mz(
-                    P.filtered_sage_results_tsv,
-                    P.search_precursors,
-                    P.recalibration_config,
-                    fdr=cfg.sage_summarize.fdr,
-                    tool=tool_module(RecalibratePrecursorsModule),
-                )
-                corrections.update(fragment_shift_ppm=P.fragment_shift_ppm, mz=P.corrected_mz)
+                corrections["mz"] = P.corrected_mz
                 tolerances.update(
                     precursor_tolerance=P.precursor_mz_search_tolerance,
                     fragment_tolerance=P.fragment_mz_search_tolerance,
@@ -1842,8 +1798,7 @@ def build_ionmaiden_pipeline(P: Pipeline, config: dict) -> None:
         )
 
     # Exports -- current_tof2mz_table/current_precursors are the recalibrated
-    # table and the mz/rt/iim-corrected precursors (carrying `fragment_shift_ppm`)
-    # when recalibration ran (mode 2: mz only; mode 3: mz+RT+IIM), otherwise the
+    # table and the mz/rt/iim-corrected precursors when recalibration ran (mode 2: mz only; mode 3: mz+RT+IIM), otherwise the
     # raw table and search_precursors (mode 1). Both must come from the same mode
     # SAGE1 actually searched against, or the exported headers and the SAGE
     # results disagree on what a peak's mz/rt/iim actually was -- see

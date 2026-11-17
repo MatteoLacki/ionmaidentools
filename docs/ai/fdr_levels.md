@@ -1,4 +1,4 @@
-# FDR levels and run recording inside `run_sage` / `mokapot` (2026-10-13)
+# FDR levels and run recording inside `run_sage` / `mokapot`
 
 The last step of both commands counts the node's confident spectra, peptidoforms and
 ions at 1% FDR, each level from its own target-decoy competition, into a declared output,
@@ -28,16 +28,10 @@ is made exactly when the tool ran. A job still has to request the labels to get 
 copied to its results directory, so every job requesting SAGE or mokapot outputs
 requests them (`sage_fdr_levels`, `mokapot_fdr_levels`, and
 `filtered_sage_fdr_levels` where the job requests `filtered_sage_results_tsv`). The cost:
-editing either command callback changes every such node's identity, so all SAGE and
-mokapot nodes reran once for this change, and SAGE's output differs run to run, so
-everything downstream of the first SAGE pass reran with them. On
-`jobs/f9477_marginal_cosine.toml` that was 9 nodes in 4 min (both SAGE passes,
-recalibration, RT prediction and correction, mokapot), and the counts matched that
-configuration's earlier run (SAGE 21,461 and mokapot 28,644 peptidoforms); run database
-rows 1-3.
+editing either command callback changes every SAGE or mokapot node's identity.
 
 Counting is DuckDB SQL over the result tables and takes about 1 s per node on F9477
 (git/searchops `fdr_levels.py`, `ion_level_fdr.py`).
 
-The older `sage_summarize` rule (`sage-summarize-raw`: PSMs, peptides, PSM-collapsed
-ions and proteins at peptide-level FDR) is unchanged and still requested by some jobs.
+The `sage_summarize` rule (`sage-summarize-raw`: PSMs, peptides, PSM-collapsed ions and
+proteins at peptide-level FDR) counts differently and is requested by some jobs.

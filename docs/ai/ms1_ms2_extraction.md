@@ -14,10 +14,9 @@ local tensor outputs for Python analysis. Selected precursor tables retain TOF/U
 coordinates. Legacy materialized datasets remain readable, and the standalone
 converter still defaults to materialized output. No pipeline storage-mode knob.
 
-The 1024-MiB budget makes MS1 conversion output clean before exit, avoiding the
-previously measured dirty-page tail. See
-`git/timstofu/docs/ai/compact_ms1.md` (relative to the pipeline root) for consumer
-coverage and the 2026-09-08 full-chain equivalence/runtime measurements.
+The 1024-MiB budget makes MS1 conversion output clean before exit, with no post-exit
+dirty-page tail. See `git/timstofu/docs/ai/compact_ms1.md` (relative to the pipeline root)
+for consumer coverage and equivalence.
 
 The converter decompresses each MS1 frame once, stable-count-sorts it to a `(tof,scan)` run, then
 uses event-balanced TOF shards to merge runs into disjoint sequential mmap regions while building

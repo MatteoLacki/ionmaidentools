@@ -1,4 +1,4 @@
-# Peptide table and predictions mapped by SAGE (2026-10-17)
+# Peptide table and predictions mapped by SAGE
 
 Plan: necromerge2 `plans/mapped_peptide_table.md`. SAGE side: `git/sage`
 `docs/ai/mapped_inputs.md`.
@@ -14,7 +14,7 @@ digest setting, shared by every job and both SAGE passes. Output
 
 `run_sage` takes it as an optional input (`compact_peptides`, `--compact-peptides`),
 passed only when SAGE runs its sliced search (`_sage_searches_sliced`): when
-`cfg.sage.database.sliced` is true, or, since 2026-10-21, when it is unset and none of
+`cfg.sage.database.sliced` is true, or when it is unset and none of
 `database.prefilter`, `wide_window` and `chimera` is set, mirroring SAGE's own default
 (git/sage `docs/ai/sliced_search.md`). The monolithic search builds its own index and
 does not read the table. The workflow declares the node for
@@ -25,12 +25,8 @@ comes from sage's full digest (its `proteins` column lists every protein holding
 peptide, which the table does not store), and keeping the two apart leaves
 `dump_peptides` and everything downstream of it untouched.
 
-## Prediction nodes became mmappet datasets
+## Predictions are mmappet datasets
 
-`PredictedRt` (`predicted_rt.mmappet`), `PredictedIim` (`predicted_iim.mmappet`)
-and `FragmentIntensityForSage` (`fragment_intensity_for_sage.mmappet`) are now
-`MmappetDataset`s: the same values and row order as the parquets they replace, with
-the `dumped_peptides_sha256` fingerprint in a `meta.json` sidecar. SAGE maps them
-read-only instead of decoding them into memory. The renamed outputs make
-`predict_rt`, `predict_iim`, `export_fragment_intensity_for_sage` and their
-consumers run once more; the Koina caches are warm, so that costs no predictions.
+`PredictedRt` (`predicted_rt.mmappet`) and the SPECLIB parts are `MmappetDataset`s with the
+`dumped_peptides_sha256` fingerprint in a `meta.json` sidecar; SAGE maps them read-only
+instead of decoding them into memory.
